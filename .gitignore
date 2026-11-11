@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# research output
+topics/
+node_modules/
+
+# research briefs (personal/project context)
+briefs/diversity-weighted-synthetic-data.md

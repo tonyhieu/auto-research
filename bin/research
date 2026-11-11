@@ -1,0 +1,5 @@
+#!/bin/sh
+# Entry point: research -t "Topic" -n <windows> [-c <concurrency>]
+# caffeinate -i keeps the mac from idle-sleeping while waiting for a window reset.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec caffeinate -i "$DIR/node_modules/.bin/tsx" "$DIR/src/cli.ts" "$@"
