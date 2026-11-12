@@ -34,7 +34,7 @@ import {
 import { promoteToMemory } from "./memory.ts";
 import { ensureSandboxImage } from "./sandbox.ts";
 import type { TopicPaths } from "./topic.ts";
-import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, pythonTool, s2Paper, s2Search, searchTool, stateTool, taskTools, verifyTool } from "./tools.ts";
+import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, s2Paper, s2Search, searchTool, stateTool, taskTools, verifyTool } from "./tools.ts";
 import type { UsageProbe } from "./usage.ts";
 
 /** Re-plan after this many subagent completions, even if open tasks remain. */
@@ -45,6 +45,9 @@ const NO_VERDICT_NOTE = "Previous verifier recorded no verdicts.";
 const RESET_GRACE_MS = 60_000;
 /** python_run cap in focus mode, where verifiers rerun full experiments. */
 const FOCUS_PYTHON_SEC = 900;
+/** Total python_run wall time per agent, so one agent cannot hold a slot for hours. */
+const SANDBOX_BUDGET_SEC = 20 * 60;
+const FOCUS_SANDBOX_BUDGET_SEC = 45 * 60;
 
 export interface ControllerOptions {
 	topic: TopicPaths;
@@ -108,7 +111,10 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		return;
 	}
 	if (sandboxError) log(`warning: ${sandboxError}; python_run disabled`);
-	const compute = sandboxError ? [] : [focus ? makePythonTool(FOCUS_PYTHON_SEC) : pythonTool];
+	/** A fresh python_run per agent, so each agent gets its own sandbox time budget. */
+	const sandboxLimits = focus ? { maxSec: FOCUS_PYTHON_SEC, budgetSec: FOCUS_SANDBOX_BUDGET_SEC } : { maxSec: 300, budgetSec: SANDBOX_BUDGET_SEC };
+	const compute = (onRun?: (sec: number) => void) => (sandboxError ? [] : [makePythonTool({ ...sandboxLimits, onRun })]);
+	const sandboxLine = (sec: number) => (sec ? `; sandbox ${Math.round(sec)}s` : "");
 	const stateFile = focus?.state ?? topic.orchestratorState;
 	/** Set once the focus outcome is written back to the ledger (focus_verdict). */
 	let verdictRecorded = false;
@@ -194,15 +200,16 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	};
 
 	const research = async (task: Task, name: string): Promise<AgentResult> => {
+		let sandboxSec = 0;
 		const r = await runAgent({
 			...common,
 			name,
 			systemPrompt: subagentSystem(topic, !!focus),
 			prompt: subagentPrompt(task),
 			builtinTools: ["read", "write", "ls"],
-			tools: [s2Search, s2Paper, ...Object.values(ledgerTools(topic, name, task.id)), ...compute],
+			tools: [s2Search, s2Paper, ...Object.values(ledgerTools(topic, name, task.id)), ...compute((s) => (sandboxSec += s))],
 		});
-		finish(task, name, r);
+		finish(task, name, r, sandboxLine(sandboxSec));
 		const queued = enqueueVerifyTasks(topic, focus?.key);
 		if (queued) log(`queued ${queued} verify task(s)`);
 		if (!r.interrupted && task.addresses?.length) {
@@ -230,7 +237,11 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			: "";
 		let searches = 0;
 		let runs = 0;
-		const py = compute.length ? [makePythonTool(focus ? FOCUS_PYTHON_SEC : 300, () => runs++)] : [];
+		let sandboxSec = 0;
+		const py = compute((s) => {
+			runs++;
+			sandboxSec += s;
+		});
 		const r = await runAgent({
 			...common,
 			name,
@@ -254,20 +265,20 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		if (!r.interrupted && verdicts.length === 0 && !retry) {
 			log(`warning: ${name} recorded no verdicts for ${finding.id}; re-queued once`);
 			releaseTask(topic.tasks, task, NO_VERDICT_NOTE);
-			log(`[${name}] released; ${usageLine(r)}`);
+			log(`[${name}] released; ${usageLine(r)}${sandboxLine(sandboxSec)}`);
 			return r;
 		}
 		if (!r.interrupted && verdicts.length === 0) log(`warning: ${name} recorded no verdicts for ${finding.id} on retry; giving up`);
-		finish(task, name, r);
+		finish(task, name, r, sandboxLine(sandboxSec));
 		return r;
 	};
 
-	const finish = (task: Task, name: string, r: AgentResult) => {
+	const finish = (task: Task, name: string, r: AgentResult, extra = "") => {
 		if (r.interrupted) {
 			const n = readFindings(topic.ledger).filter((f) => f.taskId === task.id).length;
 			releaseTask(topic.tasks, task, `${name} interrupted (${r.interrupted}) after recording ${n} finding(s).`);
 		} else updateTask(topic.tasks, { ...task, status: "done" });
-		log(`[${name}] ${r.interrupted ? `interrupted: ${r.interrupted}` : "done"}; ${usageLine(r)}`);
+		log(`[${name}] ${r.interrupted ? `interrupted: ${r.interrupted}` : "done"}; ${usageLine(r)}${extra}`);
 	};
 
 	/** Token breakdown plus current subscription reading, logged after every agent. */

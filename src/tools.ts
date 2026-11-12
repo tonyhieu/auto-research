@@ -182,26 +182,43 @@ export function verifyTool(
 	});
 }
 
-/** python_run with a per-call time cap; `onRun` lets a caller count runs (reproduce verdicts need one). */
-export function makePythonTool(maxSec = 300, onRun?: () => void) {
+export interface PythonToolOptions {
+	/** Per-call timeout cap. */
+	maxSec?: number;
+	/** Total sandbox wall time for this tool instance (one agent); calls are clamped to what is left. */
+	budgetSec?: number;
+	/** Called after each run with its wall time; lets a caller count runs (reproduce verdicts need one). */
+	onRun?: (sec: number) => void;
+	run?: typeof runPython;
+}
+
+/** python_run with a per-call cap and a per-agent wall-time budget. Create one instance per agent. */
+export function makePythonTool({ maxSec = 300, budgetSec = Infinity, onRun, run = runPython }: PythonToolOptions = {}) {
+	let used = 0;
+	const budgetNote = Number.isFinite(budgetSec) ? ` Total sandbox time per agent is ${Math.round(budgetSec / 60)} min; each result reports what is left.` : "";
 	return defineTool({
 		name: "python_run",
 		label: "Run Python",
-		description: `Run a Python 3.12 script in an offline sandbox (numpy, scipy, sympy, scikit-learn; no network; 2 GB RAM; files only under /work or /tmp, discarded after). Use for quick numeric checks, symbolic derivations, and toy experiments. timeout_sec is capped at ${maxSec}. Print what you need; output is capped at 8000 chars.`,
+		description: `Run a Python 3.12 script in an offline sandbox (numpy, scipy, sympy, scikit-learn; no network; 2 GB RAM; files only under /work or /tmp, discarded after). Use for quick numeric checks, symbolic derivations, and toy experiments. timeout_sec is capped at ${maxSec}.${budgetNote} Print what you need; output is capped at 8000 chars.`,
 		parameters: Type.Object({
 			code: Type.String(),
 			timeout_sec: Type.Optional(Type.Integer({ minimum: 1, maximum: maxSec, default: 60 })),
 		}),
 		async execute(_id, p) {
-			onRun?.();
-			const r = await runPython(p.code, Math.min(p.timeout_sec ?? 60, maxSec));
+			const left = budgetSec - used;
+			if (left < 1) return text("[refused] Sandbox time budget for this agent is used up. Record what you have and finish; note any experiment left unrun.");
+			const start = Date.now();
+			const r = await run(p.code, Math.max(1, Math.floor(Math.min(p.timeout_sec ?? 60, maxSec, left))));
+			const sec = (Date.now() - start) / 1000;
+			used += sec;
+			onRun?.(sec);
 			const status = r.timedOut ? "timed out" : `exit ${r.exitCode}`;
-			return text(`[${status}]\n${r.output || "(no output)"}`);
+			const remaining = Number.isFinite(budgetSec) ? `; sandbox time left ${Math.max(0, Math.round(budgetSec - used))}s` : "";
+			return text(`[${status}${remaining}]\n${r.output || "(no output)"}`);
 		},
 	});
 }
 
-export const pythonTool = makePythonTool();
 
 /**
  * Write a focus run's outcome back to the ledger: a verdict on the target (a free-text hypothesis becomes a

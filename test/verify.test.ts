@@ -17,7 +17,7 @@ import {
 	updateTask,
 } from "../src/ledger.ts";
 import { ensureTopic } from "../src/topic.ts";
-import { focusVerdictTool, verifyTool } from "../src/tools.ts";
+import { focusVerdictTool, makePythonTool, verifyTool } from "../src/tools.ts";
 import { resolveFocus, scopeProblems } from "../src/focus.ts";
 
 const F: Finding = { id: "f1", ts: "t0", author: "a", claim: "c", evidence: "e", sources: ["p"], status: "unverified", kind: "insight" };
@@ -205,4 +205,28 @@ test("focus_verdict: refuses without a saved verdict, or with untagged untested 
 	await assert.rejects(call, /left untested without an allowed reason[\s\S]*C1 out of scope \(future work\)/);
 	writeFileSync(focus.state, "## Claim tree\n- C1 out of scope [needs-gpu]\n## Verdict\nholds");
 	await call();
+});
+
+test("python_run: per-agent sandbox budget clamps timeouts and refuses once used up", async () => {
+	const timeouts: number[] = [];
+	let clock = 0;
+	const realNow = Date.now;
+	Date.now = () => clock;
+	try {
+		const run = async (_code: string, sec = 60) => {
+			timeouts.push(sec);
+			clock += sec * 1000; // each run uses its full timeout
+			return { exitCode: 0, output: "ok", timedOut: false };
+		};
+		const runs: number[] = [];
+		const tool = makePythonTool({ maxSec: 900, budgetSec: 1000, onRun: (s) => runs.push(s), run });
+		const call = async (p: object) => (await tool.execute("id", p as never, undefined, undefined, {} as never)).content[0];
+		assert.match(JSON.stringify(await call({ code: "x", timeout_sec: 900 })), /time left 100s/);
+		await call({ code: "x", timeout_sec: 900 });
+		assert.deepEqual(timeouts, [900, 100], "second call clamped to the remaining budget");
+		assert.match(JSON.stringify(await call({ code: "x" })), /refused/);
+		assert.deepEqual(runs, [900, 100], "refused calls are not counted as runs");
+	} finally {
+		Date.now = realNow;
+	}
 });
