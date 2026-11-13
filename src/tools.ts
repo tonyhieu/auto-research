@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFileSync, writeFileSync } from "node:fs";
-import { SCOPE_TAGS, scopeProblems, type Focus } from "./focus.ts";
+import { SCOPE_TAGS, claimTreeIds, scopeProblems, type Focus } from "./focus.ts";
 import {
 	appendFinding,
 	appendVerification,
@@ -11,6 +11,8 @@ import {
 	queryFindings,
 	readFindings,
 	readVerifications,
+	requeueVerification,
+	verificationPending,
 	type Finding,
 	type VerificationCheck,
 } from "./ledger.ts";
@@ -66,6 +68,17 @@ export const s2Paper = defineTool({
 		return text(formatPaper(await getPaper(p.id), 4000));
 	},
 });
+
+/** Wrap a fetch tool (ledger_get, paper_details) so the ids it is called with are added to `sink`. */
+export function trackFetches(tool: ToolDefinition, sink: Set<string>): ToolDefinition {
+	return {
+		...tool,
+		execute: (id, p: { ids?: string[]; id?: string }, ...rest) => {
+			for (const x of p.ids ?? [p.id ?? ""]) sink.add(x);
+			return tool.execute(id, p as never, ...rest);
+		},
+	} as ToolDefinition;
+}
 
 export function ledgerTools(topic: TopicPaths, author: string, taskId?: string) {
 	const add = defineTool({
@@ -147,8 +160,10 @@ export function verifyTool(
 	by: string,
 	searches: () => number,
 	checks: VerificationCheck[] = BASE_CHECKS,
-	/** python_run calls this session; a reproduce pass/fail must rest on the verifier's own rerun. */
+	/** python_run calls this session; any reproduce verdict must rest on the verifier's own attempt. */
 	runs: () => number = () => 0,
+	/** Ids fetched with ledger_get or paper_details this session; when given, a citation verdict needs one of the finding's sources. */
+	fetched?: () => ReadonlySet<string>,
 ): ToolDefinition {
 	return defineTool({
 		name: "verify_record",
@@ -171,10 +186,19 @@ export function verifyTool(
 					`A novelty pass needs at least ${NOVELTY_MIN_PAPERS} distinct papers checked; you listed ${new Set(p.sources).size}. Search more (paraphrased queries, related terms) or record inconclusive.`,
 				);
 			}
-			if (p.check === "reproduce" && p.verdict !== "inconclusive" && runs() < 1) {
+			if (p.check === "reproduce" && runs() < 1) {
 				throw new Error(
-					"A reproduce pass or fail needs your own python_run rerun in this session; another finding's rerun does not count. Rerun it (fewer seeds or a smaller n is fine if you say so), or record inconclusive.",
+					"A reproduce verdict (including inconclusive) needs your own python_run attempt in this session; another finding's rerun does not count. Rerun what the evidence specifies (fewer seeds or a smaller n is fine if you say so); record inconclusive only if your attempt shows the setup cannot be rebuilt.",
 				);
+			}
+			if (p.check === "citation" && fetched) {
+				const sources = readFindings(topic.ledger).find((f) => f.id === findingId)?.sources ?? [];
+				const got = fetched();
+				if (sources.length && !sources.some((s) => got.has(s))) {
+					throw new Error(
+						`A citation verdict (including inconclusive) needs you to open the cited sources first: ledger_get for finding ids, paper_details for paperIds. None of ${sources.join(", ")} was fetched this session.`,
+					);
+				}
 			}
 			const v = appendVerification(topic.verifications, { findingId, by, ...p });
 			return text(`Recorded ${v.check}=${v.verdict} for ${findingId} (${v.id}).`);
@@ -268,6 +292,15 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus, onRecord: () =
 						`${p.outcome} needs refutedBy: settled (verified or refuted) findings, other than the target, showing which part is wrong${bad.length ? `; not settled or unknown: ${bad.join(", ")}` : ""}. If nothing in the claim is refuted, the outcome is holds.`,
 					);
 				}
+			}
+			// A verdict may not rest on findings that are unverified but can still be checked.
+			const cited = [...new Set([...claimTreeIds(state), ...p.sources, ...(p.refutedBy ?? []), ...(`${p.summary} ${p.evidence ?? ""}`.match(/f-[0-9a-f]{8}/g) ?? [])])];
+			const pending = verificationPending(topic, cited.filter((id) => id !== focus.findingId), focus.key);
+			if (pending.length) {
+				const queued = requeueVerification(topic, { addresses: pending, focus: focus.key });
+				throw new Error(
+					`The verdict cites unverified findings: ${pending.join(", ")}${queued.length ? ` (re-verification queued for ${queued.join(", ")})` : " (verification already queued)"}. Remove ## Verdict from your state and end this epoch; write the verdict again once they are settled.`,
+				);
 			}
 			const all = readFindings(topic.ledger);
 			const target =

@@ -18,7 +18,7 @@ import {
 	updateTask,
 	type Task,
 } from "./ledger.ts";
-import type { Focus } from "./focus.ts";
+import { claimTreeIds, type Focus } from "./focus.ts";
 import {
 	focusOrchestratorSystem,
 	focusSummaryPrompt,
@@ -34,7 +34,7 @@ import {
 import { promoteToMemory } from "./memory.ts";
 import { ensureSandboxImage } from "./sandbox.ts";
 import type { TopicPaths } from "./topic.ts";
-import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, s2Paper, s2Search, searchTool, stateTool, taskTools, verifyTool } from "./tools.ts";
+import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, s2Paper, trackFetches, s2Search, searchTool, stateTool, taskTools, verifyTool } from "./tools.ts";
 import type { UsageProbe } from "./usage.ts";
 
 /** Re-plan after this many subagent completions, even if open tasks remain. */
@@ -238,6 +238,8 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		let searches = 0;
 		let runs = 0;
 		let sandboxSec = 0;
+		/** Sources the verifier opened; a citation verdict needs at least one of the finding's. */
+		const fetched = new Set<string>();
 		const py = compute((s) => {
 			runs++;
 			sandboxSec += s;
@@ -251,10 +253,10 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			builtinTools: focus ? [] : ["read", "ls"],
 			tools: [
 				searchTool(() => searches++),
-				s2Paper,
+				trackFetches(s2Paper, fetched),
 				lt.list,
-				lt.get,
-				verifyTool(topic, finding.id, name, () => searches, checks, () => runs),
+				trackFetches(lt.get, fetched),
+				verifyTool(topic, finding.id, name, () => searches, checks, () => runs, () => fetched),
 				...py,
 			],
 		});
@@ -297,10 +299,8 @@ export async function runController(o: ControllerOptions): Promise<void> {
 
 	/** Unverified findings cited in the focus claim tree. */
 	const unsettledCited = () => {
-		const s = readFileSync(stateFile, "utf8");
-		const tree = s.split(/^## /m).find((x) => x.startsWith("Claim tree")) ?? s;
 		const status = new Map(loadFindings(topic).map((f) => [f.id, f.status]));
-		return [...new Set(tree.match(/f-[0-9a-f]{8}/g) ?? [])].filter((id) => status.get(id) === "unverified");
+		return claimTreeIds(readFileSync(stateFile, "utf8")).filter((id) => status.get(id) === "unverified");
 	};
 	const verdictNudge = (unsettled: string[], queued: string[], unrecorded: boolean) =>
 		"\n\n# Note\n" +

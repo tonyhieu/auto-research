@@ -17,7 +17,7 @@ import {
 	updateTask,
 } from "../src/ledger.ts";
 import { ensureTopic } from "../src/topic.ts";
-import { focusVerdictTool, makePythonTool, verifyTool } from "../src/tools.ts";
+import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, trackFetches, verifyTool } from "../src/tools.ts";
 import { resolveFocus, scopeProblems } from "../src/focus.ts";
 
 const F: Finding = { id: "f1", ts: "t0", author: "a", claim: "c", evidence: "e", sources: ["p"], status: "unverified", kind: "insight" };
@@ -109,15 +109,16 @@ test("focus: same target reuses its key and state; verify tasks scoped to the fo
 	assert.equal(enqueueVerifyTasks(t), 1, "breadth still covers its own backlog");
 });
 
-test("verify_record: a reproduce pass or fail needs the verifier's own python_run", async () => {
+test("verify_record: a reproduce pass or fail needs the verifier's own python_run attempt", async () => {
 	const t = ensureTopic("vrp", mkdtempSync(join(tmpdir(), "ar-")));
 	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
 	let runs = 0;
 	const tool = verifyTool(t, f.id, "ver-1", () => 0, ["citation", "adversarial", "novelty", "reproduce"], () => runs);
 	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
 	await assert.rejects(() => call({ check: "reproduce", verdict: "pass", rationale: "relied on f-x", sources: [] }), /own python_run/);
-	await call({ check: "reproduce", verdict: "inconclusive", rationale: "too underspecified", sources: [] });
+	await assert.rejects(() => call({ check: "reproduce", verdict: "inconclusive", rationale: "did not try", sources: [] }), /own python_run/);
 	runs = 1;
+	await call({ check: "reproduce", verdict: "inconclusive", rationale: "tried; setup missing n", sources: [] });
 	await call({ check: "reproduce", verdict: "pass", rationale: "reran", sources: [] });
 });
 
@@ -229,4 +230,30 @@ test("python_run: per-agent sandbox budget clamps timeouts and refuses once used
 	} finally {
 		Date.now = realNow;
 	}
+});
+
+test("focus_verdict: refuses while a cited finding is unverified but checkable, and queues its re-verification", async () => {
+	const t = ensureTopic("fu", mkdtempSync(join(tmpdir(), "ar-")));
+	const focus = resolveFocus(t, "free text");
+	updateTask(t.tasks, { ...createTask(t.tasks, "x", "d", { focus: focus.key }), status: "done" });
+	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	writeFileSync(focus.state, `## Claim tree\n- C1 holds (${f.id})\n## Verdict\nholds`);
+	const call = () =>
+		focusVerdictTool(t, focus, () => {}).execute("id", { outcome: "holds", summary: "s", sources: ["p"] } as never, undefined, undefined, {} as never);
+	await assert.rejects(call, new RegExp(`cites unverified findings: ${f.id} \\(re-verification queued`));
+	assert.ok(listTasks(t.tasks).some((x) => x.type === "verify" && x.findingId === f.id && x.focus === focus.key));
+	for (const check of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: f.id, check, verdict: "pass", rationale: "r", sources: [], by: "ver" });
+	await call();
+});
+
+test("verify_record: a citation verdict needs one of the finding's sources fetched", async () => {
+	const t = ensureTopic("vcf", mkdtempSync(join(tmpdir(), "ar-")));
+	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["f-0123abcd", "paperX"], status: "unverified" });
+	const fetched = new Set<string>();
+	const get = trackFetches(ledgerTools(t, "ver-1").get, fetched);
+	const tool = verifyTool(t, f.id, "ver-1", () => 0, BASE_CHECKS, () => 0, () => fetched);
+	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
+	await assert.rejects(() => call({ check: "citation", verdict: "inconclusive", rationale: "did not fetch", sources: [] }), /open the cited sources/);
+	await get.execute("id", { ids: ["f-0123abcd"] } as never, undefined, undefined, {} as never);
+	await call({ check: "citation", verdict: "pass", rationale: "checked", sources: [] });
 });

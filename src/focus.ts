@@ -33,6 +33,12 @@ export function scopeProblems(state: string): string[] {
 	return [...tree, ...open].filter((l) => !TAG.test(l));
 }
 
+/** Finding ids cited in the claim tree (the whole state if it has no claim tree). */
+export function claimTreeIds(state: string): string[] {
+	const tree = section(state, "Claim tree") || state;
+	return [...new Set(tree.match(/f-[0-9a-f]{8}/g) ?? [])];
+}
+
 /** Reuse the focus with the same target (so a later run continues its claim tree), else start a new one. */
 export function resolveFocus(topic: TopicPaths, target: string): Focus {
 	const file = join(topic.state, "focus.json");

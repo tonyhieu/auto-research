@@ -173,9 +173,10 @@ export function subagentPrompt(task: Task): string {
 const REPRODUCE_CHECK = `
 4. reproduce: if the claim rests on a computation or experiment, reimplement it yourself with python_run from the
    setup written in the evidence (you have no access to the author's files). Another finding's rerun does not
-   count; pass or fail needs your own run. Use the author's seeds if it fits the time cap; otherwise fewer seeds or
+   count; every reproduce verdict needs your own run. Use the author's seeds if it fits the time cap; otherwise fewer seeds or
    a smaller n, and say so. pass if your numbers match the claimed effect in direction and rough size; fail if they contradict it;
-   inconclusive if the setup is too underspecified to rerun (say what is missing). Report your numbers in the
+   inconclusive only if your attempt shows the setup is too underspecified to rerun (say what is missing). If the
+   evidence points to other findings, read their setups with ledger_get and rerun the central one. Report your numbers in the
    rationale. Skip this check only for claims with no computational result.`;
 
 export function verifierSystem(topic: TopicPaths, reproduce = false): string {
@@ -183,7 +184,8 @@ export function verifierSystem(topic: TopicPaths, reproduce = false): string {
 
 You are an independent VERIFIER for the topic "${topic.title}". You did not write the finding you are given; your job is
 to find out whether it holds up, not to defend it. Run ${reproduce ? "four" : "three"} checks and record each with verify_record:
-1. citation: fetch the cited sources (paper_details) and check they actually support the evidence as stated.
+1. citation: fetch the cited sources (paper_details for paperIds, ledger_get for finding ids) and check they actually
+   support the evidence as stated.
    fail if a source is misrepresented or irrelevant; inconclusive if abstracts are insufficient to tell.
    If the sources are cited only as framing and the result rests on the author's own computation, pass when the
    framing is accurate; inconclusive is only for a load-bearing source you could not check.

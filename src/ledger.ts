@@ -176,6 +176,17 @@ const settled = (f: Finding) => f.status === "refuted" || (f.status === "verifie
 
 const active = (x: Task) => x.status !== "done";
 
+/** Of `ids`, the unverified findings that can still be verified in this mode: a verify task is active or attempts remain. */
+export function verificationPending(t: { ledger: string; verifications: string; tasks: string }, ids: string[], focus?: string): string[] {
+	const tasks = listTasks(t.tasks);
+	const findings = new Map(loadFindings(t).map((f) => [f.id, f]));
+	return ids.filter((id) => {
+		if (findings.get(id)?.status !== "unverified") return false;
+		const attempts = tasks.filter((x) => x.type === "verify" && x.findingId === id && x.focus === focus);
+		return attempts.some(active) || attempts.length < MAX_VERIFY_ATTEMPTS;
+	});
+}
+
 /**
  * After follow-up research finishes, queue a fresh verify task for each addressed finding that is
  * still unsettled, under the attempt cap and not already queued. Returns the finding ids queued.
