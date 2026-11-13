@@ -256,7 +256,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 				trackFetches(s2Paper, fetched),
 				lt.list,
 				trackFetches(lt.get, fetched),
-				verifyTool(topic, finding.id, name, () => searches, checks, () => runs, () => fetched),
+				verifyTool(topic, finding.id, name, () => searches, checks, () => runs, () => fetched, py.length > 0 && reproducible(finding)),
 				...py,
 			],
 		});

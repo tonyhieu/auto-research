@@ -257,3 +257,17 @@ test("verify_record: a citation verdict needs one of the finding's sources fetch
 	await get.execute("id", { ids: ["f-0123abcd"] } as never, undefined, undefined, {} as never);
 	await call({ check: "citation", verdict: "pass", rationale: "checked", sources: [] });
 });
+
+test("verify_record: an adversarial verdict on a computational finding needs the verifier's own python_run", async () => {
+	const t = ensureTopic("vadv", mkdtempSync(join(tmpdir(), "ar-")));
+	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	let runs = 0;
+	const tool = verifyTool(t, f.id, "ver-1", () => 0, BASE_CHECKS, () => runs, undefined, true);
+	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
+	await assert.rejects(() => call({ check: "adversarial", verdict: "inconclusive", rationale: "ran nothing", sources: [] }), /own python_run refutation/);
+	runs = 1;
+	await call({ check: "adversarial", verdict: "pass", rationale: "stress case held", sources: [] });
+	// Without the flag (gap/literature findings, or no sandbox) a search-only verdict is allowed.
+	const off = verifyTool(t, f.id, "ver-2", () => 0, BASE_CHECKS, () => 0);
+	await off.execute("id", { check: "adversarial", verdict: "pass", rationale: "r", sources: [] } as never, undefined, undefined, {} as never);
+});

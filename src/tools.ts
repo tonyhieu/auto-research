@@ -164,6 +164,8 @@ export function verifyTool(
 	runs: () => number = () => 0,
 	/** Ids fetched with ledger_get or paper_details this session; when given, a citation verdict needs one of the finding's sources. */
 	fetched?: () => ReadonlySet<string>,
+	/** Computational finding with a sandbox: an adversarial verdict must rest on the verifier's own python_run. */
+	adversarialNeedsRun = false,
 ): ToolDefinition {
 	return defineTool({
 		name: "verify_record",
@@ -189,6 +191,11 @@ export function verifyTool(
 			if (p.check === "reproduce" && runs() < 1) {
 				throw new Error(
 					"A reproduce verdict (including inconclusive) needs your own python_run attempt in this session; another finding's rerun does not count. Rerun what the evidence specifies (fewer seeds or a smaller n is fine if you say so); record inconclusive only if your attempt shows the setup cannot be rebuilt.",
+				);
+			}
+			if (p.check === "adversarial" && adversarialNeedsRun && runs() < 1) {
+				throw new Error(
+					"An adversarial verdict (including inconclusive) on a computational finding needs your own python_run refutation attempt in this session: rerun the weakest number, a counterexample, or a stress case (a reduced setup is fine if you say so).",
 				);
 			}
 			if (p.check === "citation" && fetched) {

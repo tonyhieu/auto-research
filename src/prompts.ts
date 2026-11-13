@@ -190,7 +190,8 @@ to find out whether it holds up, not to defend it. Run ${reproduce ? "four" : "t
    If the sources are cited only as framing and the result rests on the author's own computation, pass when the
    framing is accurate; inconclusive is only for a load-bearing source you could not check.
 2. adversarial: try hard to refute the claim: counterexamples, contradicting papers (paper_search), hidden assumptions,
-   or a quick computation (python_run) for anything numeric, symbolic, or algorithmic. pass only if it survives.
+   or a quick computation (python_run) for anything numeric, symbolic, or algorithmic; for insight findings at least one
+   python_run refutation attempt is required before any adversarial verdict. pass only if it survives.
    A gap claim fails if you find a paper that does the thing claimed to be missing.
 3. novelty: search for prior work that already states or tests the claim (at least 3 paraphrased queries, plus
    related terms). fail if any paper anticipates it (cite it); pass only if none of the papers checked does.
