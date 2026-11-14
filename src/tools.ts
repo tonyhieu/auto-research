@@ -235,13 +235,17 @@ export function makePythonTool({ maxSec = 300, budgetSec = Infinity, onRun, run 
 			code: Type.String(),
 			timeout_sec: Type.Optional(Type.Integer({ minimum: 1, maximum: maxSec, default: 60 })),
 		}),
+		// One container per agent at a time; the reservation below keeps the budget correct regardless.
+		executionMode: "sequential",
 		async execute(_id, p) {
 			const left = budgetSec - used;
 			if (left < 1) return text("[refused] Sandbox time budget for this agent is used up. Record what you have and finish; note any experiment left unrun.");
+			const timeout = Math.max(1, Math.floor(Math.min(p.timeout_sec ?? 60, maxSec, left)));
+			used += timeout; // reserve before awaiting so calls that still overlap only see what is left
 			const start = Date.now();
-			const r = await run(p.code, Math.max(1, Math.floor(Math.min(p.timeout_sec ?? 60, maxSec, left))));
+			const r = await run(p.code, timeout);
 			const sec = (Date.now() - start) / 1000;
-			used += sec;
+			used -= timeout - sec; // refund the unused part of the reservation
 			onRun?.(sec);
 			const status = r.timedOut ? "timed out" : `exit ${r.exitCode}`;
 			const remaining = Number.isFinite(budgetSec) ? `; sandbox time left ${Math.max(0, Math.round(budgetSec - used))}s` : "";

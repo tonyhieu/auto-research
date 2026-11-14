@@ -257,6 +257,22 @@ test("python_run: per-agent sandbox budget clamps timeouts and refuses once used
 	}
 });
 
+test("python_run: concurrent calls reserve budget before awaiting", async () => {
+	const timeouts: number[] = [];
+	const run = async (_code: string, sec = 60) => {
+		timeouts.push(sec);
+		await new Promise((r) => setImmediate(r));
+		return { exitCode: 0, output: "ok", timedOut: false };
+	};
+	const tool = makePythonTool({ maxSec: 900, budgetSec: 100, run });
+	assert.equal(tool.executionMode, "sequential");
+	const call = () => tool.execute("id", { code: "x", timeout_sec: 80 } as never, undefined, undefined, {} as never);
+	await Promise.all([call(), call()]);
+	assert.equal(timeouts[0], 80);
+	assert.ok(timeouts[1] <= 20, `second call got ${timeouts[1]}s`);
+	assert.ok(timeouts[0] + timeouts[1] <= 100);
+});
+
 test("focus_verdict: refuses while a cited finding is unverified but checkable, and queues its re-verification", async () => {
 	const t = ensureTopic("fu", mkdtempSync(join(tmpdir(), "ar-")));
 	const focus = resolveFocus(t, "free text");
