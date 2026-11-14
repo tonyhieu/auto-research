@@ -5,7 +5,8 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { runController } from "./controller.ts";
 import { FINDING_ID, resolveFocus } from "./focus.ts";
 import { readFindings, resetStaleClaims } from "./ledger.ts";
-import { BRIEF_CAP, ensureTopic, readBrief, REPO_ROOT } from "./topic.ts";
+import { killAllSandboxes } from "./sandbox.ts";
+import { acquireLock, BRIEF_CAP, ensureTopic, readBrief, REPO_ROOT } from "./topic.ts";
 import { UsageProbe } from "./usage.ts";
 
 const envFile = join(REPO_ROOT, ".env");
@@ -56,23 +57,15 @@ if (target && FINDING_ID.test(target) && !readFindings(topic.ledger).some((f) =>
 
 // One process per topic: task claiming relies on it.
 const lock = join(topic.dir, ".lock");
-const pidAlive = (pid: number) => {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
-};
-if (existsSync(lock)) {
-	const pid = Number(readFileSync(lock, "utf8"));
-	if (pidAlive(pid)) {
-		console.error(`topic "${topic.slug}" is already running (pid ${pid})`);
-		process.exit(1);
-	}
+if (!acquireLock(lock)) {
+	console.error(`topic "${topic.slug}" is already running (pid ${readFileSync(lock, "utf8")})`);
+	process.exit(1);
 }
-writeFileSync(lock, String(process.pid));
-process.on("exit", () => existsSync(lock) && unlinkSync(lock));
+// Sync only: the exit handler cannot await, and sandbox kill timers die with the process.
+process.on("exit", () => {
+	killAllSandboxes();
+	if (existsSync(lock)) unlinkSync(lock);
+});
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
 
 mkdirSync(join(topic.dir, "logs"), { recursive: true });

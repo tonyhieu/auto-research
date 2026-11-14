@@ -7,6 +7,8 @@ import { REPO_ROOT } from "./topic.ts";
 // read-only root, non-root user. Built from sandbox/Dockerfile.
 export const SANDBOX_IMAGE = "auto-research-py:2";
 const MAX_OUTPUT = 8000;
+// Names of running containers, so the process can kill them on exit.
+const live = new Set<string>();
 
 /** Build the image if it is missing. Returns an error message instead of throwing. */
 export function ensureSandboxImage(): string | undefined {
@@ -43,8 +45,10 @@ export function runPython(code: string, timeoutSec = 60): Promise<PythonResult> 
 	];
 	return new Promise((resolve) => {
 		let timedOut = false;
+		live.add(name);
 		const child = execFile("docker", args, { maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
 			clearTimeout(timer);
+			live.delete(name);
 			const exitCode = err ? ((err as { code?: number }).code ?? null) : 0;
 			resolve({ exitCode: typeof exitCode === "number" ? exitCode : null, output: clip(`${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`.trim()), timedOut });
 		});
@@ -54,4 +58,14 @@ export function runPython(code: string, timeoutSec = 60): Promise<PythonResult> 
 		}, timeoutSec * 1000);
 		child.stdin?.end(code);
 	});
+}
+
+/** Kill every running sandbox container. Synchronous so it can run in a process "exit" handler. */
+export function killAllSandboxes(): void {
+	if (!live.size) return;
+	try {
+		execFileSync("docker", ["kill", ...live], { stdio: "ignore" });
+	} catch {
+		// containers may have already exited
+	}
 }

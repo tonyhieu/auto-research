@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, appendFileSync } from "node:fs";
+import { mkdtempSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseUsage } from "../src/usage.ts";
-import { ensureTopic, slugify } from "../src/topic.ts";
+import { acquireLock, ensureTopic, slugify } from "../src/topic.ts";
 import { appendFinding, createTask, listTasks, readFindings } from "../src/ledger.ts";
 
 test("parseUsage prefers limits[] session entry", () => {
@@ -29,4 +29,17 @@ test("topic layout, ledger, and tasks round-trip; malformed lines are skipped", 
 	assert.equal(readFindings(t.ledger).length, 1);
 	createTask(t.tasks, "x", "y");
 	assert.equal(listTasks(t.tasks)[0].status, "open");
+});
+
+test("acquireLock: fresh lock is taken, a live holder blocks, a stale one is replaced", () => {
+	const dir = mkdtempSync(join(tmpdir(), "ar-"));
+	const fresh = join(dir, "fresh.lock");
+	assert.equal(acquireLock(fresh), true);
+	assert.equal(readFileSync(fresh, "utf8"), String(process.pid));
+	assert.equal(acquireLock(fresh), false); // held by this (live) process
+
+	const stale = join(dir, "stale.lock");
+	writeFileSync(stale, "999999999"); // no such pid
+	assert.equal(acquireLock(stale), true);
+	assert.equal(readFileSync(stale, "utf8"), String(process.pid));
 });
