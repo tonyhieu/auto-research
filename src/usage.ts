@@ -37,14 +37,17 @@ export function parseUsage(json: UsageJson, now = new Date()): UsageSnapshot | u
 }
 
 /** Unrecoverable: needs a human to log in again. */
-class UsageAuthError extends Error {}
+export class UsageAuthError extends Error {}
 
 export class UsageProbe {
 	private last?: UsageSnapshot;
 	/** Why the most recent read attempt failed, for logging. */
 	lastError?: string;
 
-	constructor(private readonly models: ModelRuntime) {}
+	constructor(
+		private readonly models: ModelRuntime,
+		private readonly sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+	) {}
 
 	/** Fetch current usage; on 429/network errors, retry with backoff, then fall back to the last snapshot. */
 	async read(retries = 3): Promise<UsageSnapshot | undefined> {
@@ -73,7 +76,8 @@ export class UsageProbe {
 				if (e instanceof UsageAuthError) throw e;
 				this.lastError = String(e);
 			}
-			await new Promise((r) => setTimeout(r, 5000 * 2 ** attempt));
+			// No backoff after the last attempt: nothing reads after it.
+			if (attempt < retries) await this.sleep(5000 * 2 ** attempt);
 		}
 		return this.last;
 	}

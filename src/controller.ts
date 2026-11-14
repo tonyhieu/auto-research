@@ -2,7 +2,7 @@ import { appendFileSync, copyFileSync, existsSync, readFileSync } from "node:fs"
 import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { OverageError, runAgent as realRunAgent, VERIFIER_MODEL, type AgentResult } from "./agent.ts";
-import { Budget, sameWindow, WEEKLY_STOP } from "./budget.ts";
+import { Budget, sameWindow, STOP_5H, WEEKLY_STOP } from "./budget.ts";
 import {
 	claimNextTask,
 	createTask,
@@ -36,7 +36,7 @@ import { promoteToMemory } from "./memory.ts";
 import { ensureSandboxImage } from "./sandbox.ts";
 import type { TopicPaths } from "./topic.ts";
 import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, s2Paper, trackFetches, s2Search, searchTool, stateTool, taskTools, verifyTool } from "./tools.ts";
-import type { UsageProbe } from "./usage.ts";
+import { UsageAuthError, type UsageProbe } from "./usage.ts";
 
 /** Re-plan after this many subagent completions, even if open tasks remain. */
 const EPOCH_TASKS = 6;
@@ -44,6 +44,10 @@ const EPOCH_TASKS = 6;
 const NO_VERDICT_NOTE = "Previous verifier recorded no verdicts.";
 /** Wait this long past the reported reset before resuming. */
 const RESET_GRACE_MS = 60_000;
+/** Wait between usage polls when a window is exhausted and its reset time is unknown. */
+const UNKNOWN_RESET_WAIT_MS = 30 * 60_000;
+/** Polls before giving up and ending the run. */
+const UNKNOWN_RESET_TRIES = 10;
 /** python_run cap in focus mode, where verifiers rerun full experiments. */
 const FOCUS_PYTHON_SEC = 900;
 /** Total python_run wall time per agent, so one agent cannot hold a slot for hours. */
@@ -131,8 +135,16 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	/** Tasks belonging to this run's mode: the focus run's own, or untagged breadth tasks. */
 	const inScope = (t: Task) => t.focus === focus?.key;
 
-	const refreshFromEndpoint = async () => {
-		const s = await o.usage.read(1);
+	/** Auth failures are fatal only at startup; mid-run they would lose the pending summary after a long sleep. */
+	const refreshFromEndpoint = async ({ fatal = false } = {}) => {
+		let s;
+		try {
+			s = await o.usage.read(1);
+		} catch (e) {
+			if (fatal || !(e instanceof UsageAuthError)) throw e;
+			log(`warning: ${e.message}; relying on response headers`);
+			return;
+		}
 		if (s) {
 			budget.update({
 				fiveHour: s.sessionPercent,
@@ -357,8 +369,11 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	const focusResearchDone = () => listTasks(topic.tasks).filter((t) => inScope(t) && t.type !== "verify" && t.status === "done").length;
 
 	let windowStart = new Date().toISOString();
+	/** When the last summary started; the next window's report covers findings from here, including those after a wrap summary. */
+	let lastSummaryAt: string | undefined;
 	const summarize = async (windowNo: number) => {
 		const report = join("reports", `${windowStart.slice(0, 16).replace(/:/g, "")}${focus ? `-${focus.key}` : ""}-w${windowNo}.md`);
+		lastSummaryAt = new Date().toISOString();
 		log(`writing summary ${report}`);
 		const r = await runAgent({
 			...common,
@@ -381,7 +396,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		for (const e of p.errors) log(`warning: memory promotion failed: ${e}`);
 	};
 
-	await refreshFromEndpoint();
+	await refreshFromEndpoint({ fatal: true });
 	log(`start: ${budget.describe()}`);
 	// Covers findings from before verification existed or from a crashed run.
 	const backlog = enqueueVerifyTasks(topic, focus?.key);
@@ -506,6 +521,21 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		if (hardAbort.signal.aborted || phase.kind === "done" || (budget.snap.weekly ?? 0) >= WEEKLY_STOP) break;
 		if (windowNo === o.windows && pendingSummary === undefined) break;
 
+		// Exhausted with no reset time: poll usage instead of starting the next window straight into a rejection.
+		if (budget.snap.rejected && budget.snap.fiveHourReset === undefined) {
+			for (let i = 0; i < UNKNOWN_RESET_TRIES && budget.snap.fiveHourReset === undefined; i++) {
+				log(`window exhausted with unknown reset; sleeping ${UNKNOWN_RESET_WAIT_MS / 60_000} min before re-reading usage`);
+				await sleep(UNKNOWN_RESET_WAIT_MS);
+				await refreshFromEndpoint();
+			}
+			if (budget.snap.fiveHourReset === undefined) {
+				log(`error: window exhausted and no reset time after ${UNKNOWN_RESET_TRIES} tries; ending run`);
+				break;
+			}
+			// Usage still at the stop line means this reset belongs to the exhausted window, so the sleep below waits for it.
+			if ((budget.snap.fiveHour ?? 0) >= STOP_5H) windowReset = budget.snap.fiveHourReset;
+		}
+
 		// Sleep until the window resets (skip if it already rolled over).
 		const reset = budget.snap.fiveHourReset;
 		const wait = reset ? reset + RESET_GRACE_MS - Date.now() : 0;
@@ -521,7 +551,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			pendingSummary = undefined;
 		}
 		if (windowNo === o.windows) break;
-		windowStart = new Date().toISOString();
+		windowStart = lastSummaryAt ?? new Date().toISOString();
 	}
 	log(`run complete: ${budget.describe()}; ${readFindings(topic.ledger).length} findings in ledger`);
 }

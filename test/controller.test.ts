@@ -6,9 +6,9 @@ import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { OverageError, type AgentResult, type AgentSpec } from "../src/agent.ts";
 import { runController } from "../src/controller.ts";
-import { appendFinding, appendVerification, createTask, listTasks, updateTask } from "../src/ledger.ts";
+import { appendFinding, appendVerification, createTask, listTasks, updateTask, type Finding } from "../src/ledger.ts";
 import { ensureTopic, type TopicPaths } from "../src/topic.ts";
-import type { UsageProbe } from "../src/usage.ts";
+import { UsageAuthError, type UsageProbe } from "../src/usage.ts";
 import { resolveFocus, type Focus } from "../src/focus.ts";
 
 /**
@@ -28,6 +28,10 @@ function harness(opts: {
 	onOrchestrate?: (epoch: number, spec: AgentSpec) => void | Promise<void>;
 	/** Wraps each fake agent run (e.g. to throw or return an error for one task). */
 	wrap?: (spec: AgentSpec, run: () => Promise<AgentResult>) => Promise<AgentResult>;
+	/** Responses omit the 5h reset header, like a provider that reports none. */
+	noResetHeader?: boolean;
+	/** Replaces the usage probe (default: always unavailable); gets the fake clock's next reset. */
+	usage?: (reset: () => number) => UsageProbe;
 }) {
 	const logs: string[] = [];
 	const topic = ensureTopic("ctl", mkdtempSync(join(tmpdir(), "ar-ctl-")));
@@ -64,7 +68,7 @@ function harness(opts: {
 			const rejected = five >= 100;
 			spec.onResponse?.(rejected ? 429 : 200, {
 				"anthropic-ratelimit-unified-5h-utilization": String(five / 100),
-				"anthropic-ratelimit-unified-5h-reset": String(reset / 1000),
+				...(opts.noResetHeader ? {} : { "anthropic-ratelimit-unified-5h-reset": String(reset / 1000) }),
 				"anthropic-ratelimit-unified-5h-status": rejected ? "rejected" : "allowed",
 				"anthropic-ratelimit-unified-7d-utilization": String(weekly / 100),
 			});
@@ -80,7 +84,7 @@ function harness(opts: {
 		five = 0;
 		reset = now + 5 * 3600_000;
 	};
-	const usage = { read: async () => undefined, lastError: "test" } as unknown as UsageProbe;
+	const usage = opts.usage?.(() => reset) ?? ({ read: async () => undefined, lastError: "test" } as unknown as UsageProbe);
 	const realNow = Date.now;
 	Date.now = () => now;
 	const go = () =>
@@ -474,4 +478,86 @@ test("a provider error is a failed attempt: the task is not marked done, and is 
 	assert.equal(after.status, "done");
 	assert.match(after.notes?.[0] ?? "", /interrupted \(error: overloaded\)/);
 	assert.equal(after.notes?.at(-1), "Gave up after 2 failed attempts.");
+});
+
+test("exhausted window with no reset time: polls usage on a fallback wait instead of burning windows", async () => {
+	const h = harness({ step: 45, windows: 3, noResetHeader: true });
+	await h.go();
+	assert.deepEqual(h.sleeps, Array(10).fill(30 * 60_000), `calls: ${h.calls.join(",")}`);
+	assert.ok(!h.logs.some((l) => l.startsWith("window 2/")), "next window not started into a rejection");
+	assert.ok(h.logs.some((l) => /no reset time after 10 tries; ending run/.test(l)));
+});
+
+test("exhausted window with no reset time: once usage reports the reset, sleeps until it and resumes", async () => {
+	let reads = 0;
+	const h = harness({
+		step: 45,
+		windows: 2,
+		noResetHeader: true,
+		// Unavailable at startup and on the first poll; then the window is still exhausted until the fake reset.
+		usage: (reset) =>
+			({
+				read: async () => (++reads < 3 ? undefined : { sessionPercent: 100, sessionResetsAt: new Date(reset()), fetchedAt: new Date() }),
+				lastError: "test",
+			}) as unknown as UsageProbe,
+	});
+	await h.go();
+	assert.equal(h.sleeps.length, 3, `sleeps: ${h.sleeps}`);
+	assert.deepEqual(h.sleeps.slice(0, 2), [30 * 60_000, 30 * 60_000]);
+	assert.ok(h.sleeps[2] > 30 * 60_000, "slept until the reported reset");
+	assert.ok(h.logs.some((l) => l.startsWith("window 2/")), h.logs.join("\n"));
+});
+
+test("a usage auth failure at a window boundary falls back to headers instead of ending the run", async () => {
+	let reads = 0;
+	const h = harness({
+		step: 12,
+		windows: 2,
+		usage: () =>
+			({
+				read: async () => {
+					if (reads++) throw new UsageAuthError("usage endpoint auth failed (401)");
+					return undefined;
+				},
+				lastError: "test",
+			}) as unknown as UsageProbe,
+	});
+	await h.go();
+	assert.ok(h.logs.includes("warning: usage endpoint auth failed (401); relying on response headers"), h.logs.join("\n"));
+	assert.equal(h.calls.filter((c) => c === "summary").length, 2, `calls: ${h.calls.join(",")}`);
+});
+
+test("a usage auth failure at startup still ends the run", async () => {
+	const h = harness({
+		step: 12,
+		windows: 1,
+		usage: () => ({ read: async () => assert.fail(new UsageAuthError("no token")) }) as unknown as UsageProbe,
+	});
+	await assert.rejects(h.go(), /no token/);
+});
+
+test("findings recorded after the wrap summary are in the next window's summary range", async () => {
+	let late: Finding | undefined;
+	let summaries = 0;
+	const tick = () => new Promise((r) => setTimeout(r, 3));
+	const h = harness({
+		// Small steps leave room for research between the 90% wrap summary and the 97% stop.
+		step: 3,
+		windows: 2,
+		wrap: async (spec, run) => {
+			if (spec.name === "summary") summaries++;
+			else if (summaries === 1 && !late && spec.name.startsWith("sub-") && !h.calls.includes("SLEEP")) {
+				await tick();
+				late = appendFinding(h.topic.ledger, { author: spec.name, kind: "insight", claim: "late", evidence: "e", sources: ["p"], status: "unverified" });
+				await tick();
+			}
+			return run();
+		},
+	});
+	await h.go();
+	assert.ok(late, `no research ran after the wrap summary: ${h.calls.join(",")}`);
+	const prompts = h.specs.filter((s) => s.name === "summary").map((s) => s.prompt);
+	assert.equal(prompts.length, 2);
+	const since = /recorded since (\S+), with/.exec(prompts[1])![1];
+	assert.ok(since <= late.ts, `since ${since} is after the late finding ${late.ts}`);
 });
