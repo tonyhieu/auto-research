@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { readVerifications } from "./ledger.ts";
 import type { TopicPaths } from "./topic.ts";
 
 /** A depth run testing one hypothesis: a finding id or free text. */
@@ -37,6 +38,11 @@ export function scopeProblems(state: string): string[] {
 export function claimTreeIds(state: string): string[] {
 	const tree = section(state, "Claim tree") || state;
 	return [...new Set(tree.match(/f-[0-9a-f]{8}/g) ?? [])];
+}
+
+/** Whether focus_verdict has recorded this focus's verdict, in this or any earlier run. */
+export function verdictRecorded(topic: Pick<TopicPaths, "verifications">, focus: Pick<Focus, "key">): boolean {
+	return readVerifications(topic.verifications).some((v) => v.by === `focus-${focus.key}`);
 }
 
 /** Reuse the focus with the same target (so a later run continues its claim tree), else start a new one. */

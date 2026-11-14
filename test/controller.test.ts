@@ -213,7 +213,7 @@ test("focus: reproduces the target first, scopes tasks, verifier gets reproduce 
 	assert.match(orch.systemPrompt, /FOCUS mode[\s\S]*Claim: target/);
 	assert.equal(tasks.find((t) => t.title === "breadth leftover")?.status, "open", "breadth task untouched");
 	assert.equal(h.specs.filter((s) => s.name === "orchestrator").length, 2, "verdict ends the run without a nudge");
-	assert.ok(h.logs.some((l) => /focus verdict written/.test(l)));
+	assert.ok(h.logs.some((l) => /focus verdict recorded; draining/.test(l)));
 	assert.ok(h.specs.find((s) => s.name === "summary")?.prompt.includes("validity report"));
 	assert.match(String(ver.tools.find((t) => t.name === "verify_record")?.description), /reproduce/, "insight gets reproduce");
 });
@@ -252,7 +252,7 @@ test("focus mode refuses to run without the sandbox", async () => {
 	assert.ok(logs.some((l) => /focus mode needs python_run/.test(l)));
 });
 
-test("focus: a verdict citing unverified findings is sent back once, with re-verification queued", async () => {
+test("focus: a verdict citing unverified findings is sent back twice, with re-verification queued", async () => {
 	let cited = "";
 	const h = harness({
 		step: 3,
@@ -271,11 +271,11 @@ test("focus: a verdict citing unverified findings is sent back once, with re-ver
 	assert.ok(h.logs.some((l) => new RegExp(`verdict cites unverified ${cited}; re-verifying ${cited}`).test(l)), h.logs.join("\n"));
 	assert.match(orch[1].prompt, /rests on findings that are still unverified/);
 	assert.ok(listTasks(h.topic.tasks).some((t) => t.title === `Re-verify ${cited}` && t.focus === h.focus!.key));
-	assert.equal(orch.length, 2, "checked once, then the verdict is accepted");
-	assert.ok(h.logs.some((l) => /focus verdict written; ending run/.test(l)));
+	assert.equal(orch.length, 3, "sent back twice, then the run ends");
+	assert.ok(h.logs.includes("warning: ended without a recorded verdict"), h.logs.join("\n"));
 });
 
-test("focus: a verdict not recorded with focus_verdict is sent back once", async () => {
+test("focus: a verdict not recorded with focus_verdict is sent back twice, then ends with a warning", async () => {
 	const h = harness({
 		step: 3,
 		windows: 1,
@@ -285,9 +285,11 @@ test("focus: a verdict not recorded with focus_verdict is sent back once", async
 	});
 	await h.go();
 	const orch = h.specs.filter((s) => s.name === "orchestrator");
-	assert.equal(orch.length, 2);
+	assert.equal(orch.length, 3);
 	assert.match(orch[1].prompt, /focus_verdict did not record it[\s\S]*No research task has run/);
-	assert.ok(h.logs.some((l) => /not recorded with focus_verdict/.test(l)));
+	assert.match(orch[2].prompt, /focus_verdict did not record it/);
+	assert.equal(h.logs.filter((l) => /not recorded with focus_verdict; sending back/.test(l)).length, 2);
+	assert.ok(h.logs.includes("warning: ended without a recorded verdict"), h.logs.join("\n"));
 });
 
 test("focus: a verdict before any research is refused and sent back with a no-research note", async () => {
@@ -305,4 +307,52 @@ test("focus: a verdict before any research is refused and sent back with a no-re
 	await h.go();
 	const orch = h.specs.filter((s) => s.name === "orchestrator");
 	assert.match(orch[1].prompt, /No research task has run in this focus yet/);
+});
+
+test("focus: a rerun after the verdict is recorded never plans and drains open verify tasks", async () => {
+	const h = harness({
+		step: 3,
+		windows: 1,
+		focus: (t) => {
+			const f = resolveFocus(t, "free-text hypothesis");
+			const target = appendFinding(t.ledger, { author: `focus-${f.key}`, kind: "insight", claim: f.target, evidence: "e", sources: ["p"], status: "unverified" });
+			appendVerification(t.verifications, { findingId: target.id, check: "adversarial", verdict: "fail", rationale: "r", sources: [], by: `focus-${f.key}` });
+			const n = appendFinding(t.ledger, { author: `focus-${f.key}`, kind: "insight", claim: "narrowed", evidence: "e", sources: ["p"], status: "unverified" });
+			createTask(t.tasks, `Re-verify ${n.id}`, n.claim, { type: "verify", findingId: n.id, focus: f.key });
+			return f;
+		},
+	});
+	await h.go();
+	assert.ok(!h.calls.includes("orchestrator"), `calls: ${h.calls.join(",")}`);
+	assert.ok(h.calls.some((c) => c.startsWith("ver-")));
+	assert.ok(listTasks(h.topic.tasks).every((t) => t.status === "done"));
+	assert.ok(h.logs.some((l) => /verdict already recorded; in-scope tasks drained; ending run/.test(l)));
+});
+
+test("focus: after focus_verdict with a narrowed claim, the narrowed verify task drains and the orchestrator is not called again", async () => {
+	let refuter = "";
+	const h = harness({
+		step: 3,
+		windows: 1,
+		focus: (t) => {
+			const target = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "big", evidence: "e", sources: ["p"], status: "unverified" });
+			const r = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "C2 fails", evidence: "e", sources: ["p"], status: "unverified" });
+			for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: r.id, check: c, verdict: "pass", rationale: "", sources: [], by: "v" });
+			refuter = r.id;
+			return resolveFocus(t, target.id);
+		},
+		onOrchestrate: async (e, spec) => {
+			if (e !== 1) return;
+			writeFileSync(h.focus!.state, `## Claim tree\nC2 refuted (${refuter})\n## Verdict\nholds with limits`);
+			const tool = spec.tools.find((t) => t.name === "focus_verdict")!;
+			const p = { outcome: "holds_with_limits", summary: "s", narrowedClaim: "small", sources: ["p"], refutedBy: [refuter] };
+			await tool.execute("id", p as never, undefined, undefined, {} as never);
+		},
+		tasksPerEpoch: (e) => (e === 0 ? 2 : 0),
+	});
+	await h.go();
+	assert.equal(h.calls.filter((c) => c === "orchestrator").length, 2, `calls: ${h.calls.join(",")}`);
+	const narrowed = listTasks(h.topic.tasks).find((t) => t.title.startsWith("Verify ") && t.focus === h.focus!.key);
+	assert.equal(narrowed?.status, "done");
+	assert.ok(h.calls.lastIndexOf("orchestrator") < h.calls.findLastIndex((c) => c.startsWith("ver-")), `calls: ${h.calls.join(",")}`);
 });
