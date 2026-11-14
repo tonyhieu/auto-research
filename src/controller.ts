@@ -18,7 +18,8 @@ import {
 	updateTask,
 	type Task,
 } from "./ledger.ts";
-import { claimTreeIds, type Focus } from "./focus.ts";
+import { claimTreeIds, verdictRecorded, type Focus } from "./focus.ts";
+import { afterEpoch, PLANNING, type Phase } from "./lifecycle.ts";
 import {
 	focusOrchestratorSystem,
 	focusSummaryPrompt,
@@ -116,9 +117,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	const compute = (onRun?: (sec: number) => void) => (sandboxError ? [] : [makePythonTool({ ...sandboxLimits, onRun })]);
 	const sandboxLine = (sec: number) => (sec ? `; sandbox ${Math.round(sec)}s` : "");
 	const stateFile = focus?.state ?? topic.orchestratorState;
-	/** Set once the focus outcome is written back to the ledger (focus_verdict). */
-	let verdictRecorded = false;
-	const verdictTool = focus && focusVerdictTool(topic, focus, () => (verdictRecorded = true));
+	const verdictTool = focus && focusVerdictTool(topic, focus);
 	/** Tasks belonging to this run's mode: the focus run's own, or untagged breadth tasks. */
 	const inScope = (t: Task) => t.focus === focus?.key;
 
@@ -302,7 +301,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		const status = new Map(loadFindings(topic).map((f) => [f.id, f.status]));
 		return claimTreeIds(readFileSync(stateFile, "utf8")).filter((id) => status.get(id) === "unverified");
 	};
-	const verdictNudge = (unsettled: string[], queued: string[], unrecorded: boolean) =>
+	const verdictNudge = (unsettled: string[], queued: string[]) =>
 		"\n\n# Note\n" +
 		(unsettled.length
 			? `Your verdict rests on findings that are still unverified: ${unsettled.join(", ")}. ` +
@@ -310,12 +309,10 @@ export async function runController(o: ControllerOptions): Promise<void> {
 				`Usage is at ${budget.describe()}. Remove "## Verdict" from your state, and create tasks that settle these findings ` +
 				"and any open question you deferred that paper_search or python_run can answer. Write the verdict again only once they are settled. "
 			: "") +
-		(unrecorded
-			? "You wrote ## Verdict but focus_verdict did not record it, so the ledger still shows the old status. " +
-				(focusResearchDone() === 0
-					? "No research task has run in this focus yet: remove ## Verdict and create tasks that test the open sub-claims and deferred questions."
-					: "Call it with the final outcome.")
-			: "");
+		"You wrote ## Verdict but focus_verdict did not record it, so the ledger still shows the old status. " +
+		(focusResearchDone() === 0
+			? "No research task has run in this focus yet: remove ## Verdict and create tasks that test the open sub-claims and deferred questions."
+			: "Call it with the final outcome.");
 	const focusResearchDone = () => listTasks(topic.tasks).filter((t) => inScope(t) && t.type !== "verify" && t.status === "done").length;
 
 	let windowStart = new Date().toISOString();
@@ -357,11 +354,11 @@ export async function runController(o: ControllerOptions): Promise<void> {
 
 	/** Window whose summary could not run because the window was exhausted. */
 	let pendingSummary: number | undefined;
-	let noMoreWork = false;
-	/** An epoch that creates no tasks gets one nudged retry before the run ends; this is that nudge. */
+	// A recorded verdict is in the ledger, so a rerun only drains queued tasks and never re-plans.
+	let phase: Phase = focus && verdictRecorded(topic, focus) ? { kind: "draining", reason: "verdict already recorded" } : PLANNING;
+	if (phase.kind === "draining") log(`focus ${focus!.key}: ${phase.reason}; draining in-scope tasks`);
+	/** Note sent with the next orchestrator epoch (empty-epoch nudge or verdict send-back). */
 	let nudge = "";
-	/** A focus verdict is checked for unsettled findings once per run. */
-	let verdictChecked = false;
 
 	for (let windowNo = 1; windowNo <= o.windows; windowNo++) {
 		let windowReset = budget.snap.fiveHourReset;
@@ -378,7 +375,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			windowReset ??= budget.snap.fiveHourReset;
 			const state = budget.state();
 			const rolledOver = windowReset !== undefined && !sameWindow(budget.snap.fiveHourReset, windowReset);
-			if (state === "stop" || rolledOver || noMoreWork || hardAbort.signal.aborted) break;
+			if (state === "stop" || rolledOver || phase.kind === "done" || hardAbort.signal.aborted) break;
 
 			if (state === "wrap" && !summarized) {
 				await Promise.all(running);
@@ -390,37 +387,46 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			const open = listTasks(topic.tasks).filter((t) => t.status === "open" && inScope(t));
 			// Drain queued verifications before re-planning so the orchestrator sees their verdicts.
 			const verifyQueued = open.some((t) => t.type === "verify");
-			if (running.size === 0 && !verifyQueued && (!open.length || sinceEpoch >= EPOCH_TASKS)) {
+			if (phase.kind === "draining") {
+				// The one transition outside afterEpoch: draining ends once in-scope work is finished.
+				if (running.size === 0 && !open.length) {
+					log(`${phase.reason}; in-scope tasks drained; ending run`);
+					phase = { kind: "done", reason: phase.reason };
+					continue;
+				}
+			} else if (running.size === 0 && !verifyQueued && (!open.length || sinceEpoch >= EPOCH_TASKS)) {
 				const r = await orchestrate(nudge);
 				log(`[orchestrator] ${r.interrupted ?? "done"}; ${usageLine(r)}\n${r.text}`);
 				sinceEpoch = 0;
-				const wasNudged = nudge !== "";
 				nudge = "";
-				const empty = !r.interrupted && !listTasks(topic.tasks).some((t) => t.status === "open" && inScope(t));
-				const verdict = !!focus && /^## Verdict/m.test(readFileSync(stateFile, "utf8"));
-				const unsettled = empty && verdict && !verdictChecked ? unsettledCited() : [];
-				const unrecorded = empty && verdict && !verdictChecked && !verdictRecorded;
-				if (empty && verdict) verdictChecked = true;
-				if (unsettled.length || unrecorded) {
-					// Send the orchestrator back once: re-verify cited unverified findings, and/or ask for focus_verdict.
+				const next = afterEpoch(phase, {
+					empty: !listTasks(topic.tasks).some((t) => t.status === "open" && inScope(t)),
+					interrupted: !!r.interrupted,
+					verdictInState: !!focus && /^## Verdict/m.test(readFileSync(stateFile, "utf8")),
+					recorded: !!focus && verdictRecorded(topic, focus),
+				});
+				phase = next.phase;
+				if (next.warning) log(next.warning);
+				if (next.nudge === "verdict") {
+					// Send the orchestrator back: re-verify cited unverified findings and ask for focus_verdict.
+					const unsettled = unsettledCited();
 					const queued = unsettled.length ? requeueVerification(topic, { addresses: unsettled, focus: focus?.key }) : [];
 					if (unsettled.length) log(`focus verdict cites unverified ${unsettled.join(", ")}; re-verifying ${queued.join(", ") || "none (attempts used)"}`);
-					if (unrecorded) log("focus verdict written but not recorded with focus_verdict; sending back");
-					nudge = verdictNudge(unsettled, queued, unrecorded);
-				} else if (empty && (wasNudged || verdict)) {
-					log(verdict ? "focus verdict written; ending run" : "orchestrator created no tasks twice; ending run");
-					noMoreWork = true;
-				} else if (empty) {
+					log("focus verdict written but not recorded with focus_verdict; sending back");
+					nudge = verdictNudge(unsettled, queued);
+				} else if (next.nudge === "empty") {
 					log("orchestrator created no tasks; retrying once with a budget nudge");
 					nudge = nudgeText();
-				}
+				} else if (phase.kind === "draining") log("focus verdict recorded; draining in-scope tasks");
+				else if (phase.kind === "done") log(`${phase.reason}; ending run`);
 				continue;
 			}
 
 			// Fill free slots. Verify tasks go first and do not count toward the epoch boundary;
 			// research stops being claimed once the epoch's quota is in flight.
 			while (running.size < o.concurrency) {
-				const researchRoom = sinceEpoch + runningResearch < EPOCH_TASKS;
+				// Draining has no epochs to wait for, so it claims research without the quota.
+				const researchRoom = phase.kind === "draining" || sinceEpoch + runningResearch < EPOCH_TASKS;
 				const claimed = claimNextTask(topic.tasks, "pending", (t) => inScope(t) && (t.type === "verify" || researchRoom));
 				if (!claimed) break;
 				const isVerify = claimed.type === "verify";
@@ -452,7 +458,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		}
 
 		// The weekly cap does not reset with the 5h window, so it ends the whole run.
-		if (hardAbort.signal.aborted || noMoreWork || (budget.snap.weekly ?? 0) >= WEEKLY_STOP) break;
+		if (hardAbort.signal.aborted || phase.kind === "done" || (budget.snap.weekly ?? 0) >= WEEKLY_STOP) break;
 		if (windowNo === o.windows && pendingSummary === undefined) break;
 
 		// Sleep until the window resets (skip if it already rolled over).

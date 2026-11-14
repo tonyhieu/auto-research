@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFileSync, writeFileSync } from "node:fs";
-import { SCOPE_TAGS, claimTreeIds, scopeProblems, type Focus } from "./focus.ts";
+import { SCOPE_TAGS, claimTreeIds, scopeProblems, verdictRecorded, type Focus } from "./focus.ts";
 import {
 	appendFinding,
 	appendVerification,
@@ -253,12 +253,11 @@ export function makePythonTool({ maxSec = 300, budgetSec = Infinity, onRun, run 
 
 /**
  * Write a focus run's outcome back to the ledger: a verdict on the target (a free-text hypothesis becomes a
- * finding first), plus an optional narrowed claim queued for verification. Once per run, and only after
+ * finding first), plus an optional narrowed claim queued for verification. Once per focus, and only after
  * the focus has finished at least one research task; any outcome but holds must cite settled refuting findings.
  */
-export function focusVerdictTool(topic: TopicPaths, focus: Focus, onRecord: () => void): ToolDefinition {
+export function focusVerdictTool(topic: TopicPaths, focus: Focus): ToolDefinition {
 	const by = `focus-${focus.key}`;
-	let recorded = false;
 	return defineTool({
 		name: "focus_verdict",
 		label: "Record focus verdict",
@@ -273,7 +272,7 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus, onRecord: () =
 			refutedBy: Type.Optional(Type.Array(Type.String(), { description: "Settled finding ids showing which part is wrong (required unless holds)" })),
 		}),
 		async execute(_id, p) {
-			if (recorded) throw new Error("The focus verdict was already recorded this run.");
+			if (verdictRecorded(topic, focus)) throw new Error("The focus verdict was already recorded.");
 			// Validate the saved state, not the agent's intentions: it must already hold the verdict.
 			const state = readFileSync(focus.state, "utf8");
 			if (!/^## Verdict/m.test(state)) throw new Error("Save your final state with ## Verdict (state_write) before calling focus_verdict.");
@@ -336,8 +335,6 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus, onRecord: () =
 				createTask(topic.tasks, `Verify ${f.id}`, f.claim, { type: "verify", findingId: f.id, focus: focus.key });
 				narrowed = ` Narrowed claim recorded as ${f.id}; verification queued.`;
 			}
-			recorded = true;
-			onRecord();
 			return text(`Recorded ${p.outcome} on ${target}.${narrowed}`);
 		},
 	});
