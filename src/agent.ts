@@ -133,6 +133,11 @@ export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
 			if (ev.type === "tool_execution_start") log(`[${spec.name}] tool ${ev.toolName}`);
 		});
 		if (!interrupted) await session.prompt(spec.prompt);
+		// pi resolves prompt() after its retries give up on a provider error; that is a failure, not a finish.
+		if (!interrupted && session.state.errorMessage) {
+			interrupted = `error: ${session.state.errorMessage}`;
+			log(`[${spec.name}] ${interrupted}`);
+		}
 		if (overage) throw new OverageError(`${spec.name}: request billed to extra usage; aborting`);
 		const s = session.getSessionStats();
 		return {

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { AgentResult, AgentSpec } from "../src/agent.ts";
+import { OverageError, type AgentResult, type AgentSpec } from "../src/agent.ts";
 import { runController } from "../src/controller.ts";
 import { appendFinding, appendVerification, createTask, listTasks, updateTask } from "../src/ledger.ts";
 import { ensureTopic, type TopicPaths } from "../src/topic.ts";
@@ -26,6 +26,8 @@ function harness(opts: {
 	focus?: (t: TopicPaths) => Focus;
 	/** Called after each fake orchestrator epoch (e.g. to write a verdict). */
 	onOrchestrate?: (epoch: number, spec: AgentSpec) => void | Promise<void>;
+	/** Wraps each fake agent run (e.g. to throw or return an error for one task). */
+	wrap?: (spec: AgentSpec, run: () => Promise<AgentResult>) => Promise<AgentResult>;
 }) {
 	const logs: string[] = [];
 	const topic = ensureTopic("ctl", mkdtempSync(join(tmpdir(), "ar-ctl-")));
@@ -41,7 +43,8 @@ function harness(opts: {
 	const weeklyAtSummary: number[] = [];
 	const specs: AgentSpec[] = [];
 	let epochs = 0;
-	const run = async (spec: AgentSpec): Promise<AgentResult> => {
+	const run = (spec: AgentSpec): Promise<AgentResult> => (opts.wrap ? opts.wrap(spec, () => fakeRun(spec)) : fakeRun(spec));
+	const fakeRun = async (spec: AgentSpec): Promise<AgentResult> => {
 		calls.push(spec.name);
 		specs.push(spec);
 		if (spec.name === "summary") weeklyAtSummary.push(weekly);
@@ -405,4 +408,70 @@ test("focus: after focus_verdict with a narrowed claim, the narrowed verify task
 	const narrowed = listTasks(h.topic.tasks).find((t) => t.title.startsWith("Verify ") && t.focus === h.focus!.key);
 	assert.equal(narrowed?.status, "done");
 	assert.ok(h.calls.lastIndexOf("orchestrator") < h.calls.findLastIndex((c) => c.startsWith("ver-")), `calls: ${h.calls.join(",")}`);
+});
+
+test("an agent that throws fails only its own task: re-opened with a retry, the run and summary continue", async () => {
+	let thrown = 0;
+	const h = harness({
+		step: 12,
+		windows: 1,
+		wrap: async (spec, run) => {
+			if (spec.prompt.includes(": flaky") && !thrown++) throw new Error("session setup failed");
+			return run();
+		},
+	});
+	const t = createTask(h.topic.tasks, "flaky", "d");
+	await h.go();
+	const after = listTasks(h.topic.tasks).find((x) => x.id === t.id)!;
+	assert.equal(thrown, 2, "re-claimed after the failure");
+	assert.equal(after.retries, 1);
+	assert.match(after.notes?.[0] ?? "", /failed: session setup failed/);
+	assert.ok(h.logs.some((l) => new RegExp(`error: \\[sub-\\d+\\] session setup failed; re-opened ${t.id}`).test(l)), h.logs.join("\n"));
+	assert.ok(listTasks(h.topic.tasks).filter((x) => x.id !== t.id).some((x) => x.status === "done"), "other agents finished");
+	assert.equal(h.calls.at(-1), "summary");
+});
+
+test("an OverageError rejects the run only after the other running agents stop", async () => {
+	let otherSettled = false;
+	const h = harness({
+		step: 5,
+		windows: 1,
+		wrap: async (spec, run) => {
+			if (spec.name === "sub-1") {
+				await new Promise((r) => spec.signal!.addEventListener("abort", r, { once: true }));
+				await new Promise((r) => setImmediate(r));
+				otherSettled = true;
+				return run();
+			}
+			if (spec.name === "sub-2") throw new OverageError("sub-2: request billed to extra usage");
+			return run();
+		},
+	});
+	await assert.rejects(h.go(), (e) => e instanceof OverageError && otherSettled);
+	const tasks = listTasks(h.topic.tasks);
+	assert.equal(tasks.filter((t) => t.status === "claimed").length, 0, "both tasks released");
+	assert.ok(tasks.every((t) => !t.retries), "overage and abort do not count as retries");
+	assert.ok(!h.calls.includes("summary"));
+});
+
+test("a provider error is a failed attempt: the task is not marked done, and is given up at the retry cap", async () => {
+	let attempts = 0;
+	const h = harness({
+		step: 5,
+		windows: 1,
+		wrap: async (spec, run) => {
+			const r = await run();
+			if (!spec.prompt.includes(": flaky")) return r;
+			attempts++;
+			return { ...r, interrupted: "error: overloaded" };
+		},
+	});
+	const t = createTask(h.topic.tasks, "flaky", "d");
+	await h.go();
+	const after = listTasks(h.topic.tasks).find((x) => x.id === t.id)!;
+	assert.equal(attempts, 2, "claimed twice, then given up instead of re-claimed");
+	assert.equal(after.retries, 2);
+	assert.equal(after.status, "done");
+	assert.match(after.notes?.[0] ?? "", /interrupted \(error: overloaded\)/);
+	assert.equal(after.notes?.at(-1), "Gave up after 2 failed attempts.");
 });
