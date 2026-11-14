@@ -79,12 +79,14 @@ interface EpochRecord {
 
 const epochsFile = (t: TopicPaths) => join(t.state, "epochs.jsonl");
 
-function lastEpoch(t: TopicPaths): EpochRecord | undefined {
+/** Last epoch of one mode: a focus key, or breadth (records without `focus`) when undefined. */
+function lastEpoch(t: TopicPaths, focusKey?: string): EpochRecord | undefined {
 	if (!existsSync(epochsFile(t))) return undefined;
 	const lines = readFileSync(epochsFile(t), "utf8").trim().split("\n").filter(Boolean);
 	for (const l of lines.reverse()) {
 		try {
-			return JSON.parse(l) as EpochRecord;
+			const e = JSON.parse(l) as EpochRecord;
+			if (e.focus === focusKey) return e;
 		} catch {
 			// skip a truncated line
 		}
@@ -148,7 +150,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	};
 
 	const orchestrate = async (nudge = "") => {
-		const last = lastEpoch(topic);
+		const last = lastEpoch(topic, focus?.key);
 		const epoch = (last?.epoch ?? 0) + 1;
 		const before = readFileSync(stateFile, "utf8");
 		copyFileSync(stateFile, stateFile.replace(/\.md$/, ".prev.md"));
