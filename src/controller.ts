@@ -1,7 +1,7 @@
 import { appendFileSync, copyFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { runAgent as realRunAgent, VERIFIER_MODEL, type AgentResult } from "./agent.ts";
+import { OverageError, runAgent as realRunAgent, VERIFIER_MODEL, type AgentResult } from "./agent.ts";
 import { Budget, sameWindow, WEEKLY_STOP } from "./budget.ts";
 import {
 	claimNextTask,
@@ -67,6 +67,14 @@ export interface ControllerOptions {
 }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Result for an agent that did no work (missing finding, or it threw). */
+const noRun = (interrupted?: string): AgentResult => ({
+	text: "",
+	tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	toolCalls: 0,
+	interrupted,
+});
 
 interface EpochRecord {
 	epoch: number;
@@ -224,7 +232,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		const finding = readFindings(topic.ledger).find((f) => f.id === task.findingId);
 		if (!finding) {
 			updateTask(topic.tasks, { ...task, status: "done", notes: [...(task.notes ?? []), "finding not found"] });
-			return { text: "", tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, toolCalls: 0 };
+			return noRun();
 		}
 		const lt = ledgerTools(topic, name);
 		// No write tools: a verifier only records verdicts for its one finding.
@@ -281,9 +289,38 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	const finish = (task: Task, name: string, r: AgentResult, extra = "") => {
 		if (r.interrupted) {
 			const n = readFindings(topic.ledger).filter((f) => f.taskId === task.id).length;
-			releaseTask(topic.tasks, task, `${name} interrupted (${r.interrupted}) after recording ${n} finding(s).`);
+			// Provider errors count toward the retry cap; budget interruptions do not.
+			const retry = r.interrupted.startsWith("error:");
+			releaseTask(topic.tasks, task, `${name} interrupted (${r.interrupted}) after recording ${n} finding(s).`, { retry });
 		} else updateTask(topic.tasks, { ...task, status: "done" });
 		log(`[${name}] ${r.interrupted ? `interrupted: ${r.interrupted}` : "done"}; ${usageLine(r)}${extra}`);
+	};
+
+	/** Contains one agent's exception: overage stops the whole run, anything else only fails the task. */
+	const guard = async (task: Task, name: string, fn: () => Promise<AgentResult>): Promise<AgentResult> => {
+		try {
+			return await fn();
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			// Release only if the agent had not already finished the task before throwing.
+			const cur = listTasks(topic.tasks).find((t) => t.id === task.id);
+			const stillClaimed = cur?.status === "claimed" && cur.assignee === name;
+			if (e instanceof OverageError) {
+				log(`${msg}; aborting all agents`);
+				hardAbort.abort();
+				if (stillClaimed) releaseTask(topic.tasks, cur, `${name} stopped: ${msg}`);
+				throw e;
+			}
+			log(`error: [${name}] ${msg}; ${stillClaimed ? `re-opened ${task.id}` : `${task.id} left as is`}`);
+			if (stillClaimed) releaseTask(topic.tasks, cur, `${name} failed: ${msg}`, { retry: true });
+			return noRun(`error: ${msg}`);
+		}
+	};
+
+	/** Wait for every running agent; an overage rethrows only once the others have stopped. */
+	const settle = async (running: Set<Promise<AgentResult>>) => {
+		const failed = (await Promise.allSettled(running)).find((r) => r.status === "rejected");
+		if (failed) throw failed.reason;
 	};
 
 	/** Token breakdown plus current subscription reading, logged after every agent. */
@@ -382,7 +419,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			if (state === "stop" || rolledOver || phase.kind === "done" || hardAbort.signal.aborted) break;
 
 			if (state === "wrap" && !summarized) {
-				await Promise.all(running);
+				await settle(running);
 				await summarize(windowNo);
 				summarized = true;
 				continue;
@@ -439,7 +476,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 				updateTask(topic.tasks, task);
 				log(`[${name}] claimed ${task.id}: ${task.title}`);
 				if (!isVerify) runningResearch++;
-				const p = (isVerify ? verify(task, name) : research(task, name)).finally(() => {
+				const p = guard(task, name, () => (isVerify ? verify(task, name) : research(task, name))).finally(() => {
 					running.delete(p);
 					if (!isVerify) {
 						runningResearch--;
@@ -449,10 +486,14 @@ export async function runController(o: ControllerOptions): Promise<void> {
 				running.add(p);
 			}
 			if (running.size === 0) continue; // nothing claimable: loop back to orchestrate
-			await Promise.race(running);
+			// The rejected agent has already left `running`, so rethrow its error after the rest settle.
+			await Promise.race(running).catch(async (e) => {
+				await Promise.allSettled(running);
+				throw e;
+			});
 		}
 
-		await Promise.all(running);
+		await settle(running);
 		const peak = budget.peakFor(windowReset);
 		log(`window ${windowNo} ends: ${budget.describe()}; peak 5h utilization this window ${peak === undefined ? "?" : `${peak.toFixed(0)}%`}`);
 		if (!summarized) {

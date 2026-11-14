@@ -304,12 +304,21 @@ export function updateTask(tasksDir: string, t: Task): void {
 	writeFileSync(join(tasksDir, `${t.id}.json`), JSON.stringify(t, null, 2));
 }
 
+/** Failed attempts after which a task is given up instead of re-claimed. */
+export const MAX_TASK_RETRIES = 2;
+
 /**
  * Claim the oldest open task, verify tasks first, optionally restricted by `allow`. Synchronous on purpose:
  * all agents for a topic share one process (enforced by the topic lock), so no await between read and write = atomic.
  */
 export function claimNextTask(tasksDir: string, assignee: string, allow: (t: Task) => boolean = () => true): Task | undefined {
-	const open = listTasks(tasksDir).filter((x) => x.status === "open" && allow(x));
+	const candidates = listTasks(tasksDir).filter((x) => x.status === "open" && allow(x));
+	const exhausted = (x: Task) => (x.retries ?? 0) >= MAX_TASK_RETRIES;
+	// A task that keeps failing would otherwise be re-claimed forever.
+	for (const x of candidates.filter(exhausted)) {
+		updateTask(tasksDir, { ...x, status: "done", notes: [...(x.notes ?? []), `Gave up after ${x.retries} failed attempts.`] });
+	}
+	const open = candidates.filter((x) => !exhausted(x));
 	const t = open.find((x) => x.type === "verify") ?? open[0];
 	if (!t) return undefined;
 	const claimed: Task = { ...t, status: "claimed", assignee };
