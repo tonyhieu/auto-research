@@ -70,6 +70,8 @@ export interface Task {
 	focus?: string;
 	/** Progress notes from interrupted attempts, shown to the next assignee. */
 	notes?: string[];
+	/** Failed attempts that count toward a retry cap; budget interruptions do not count. */
+	retries?: number;
 }
 
 const shortId = () => randomUUID().slice(0, 8);
@@ -316,8 +318,9 @@ export function claimNextTask(tasksDir: string, assignee: string, allow: (t: Tas
 }
 
 /** Put an interrupted task back in the queue with a note for whoever picks it up next. */
-export function releaseTask(tasksDir: string, t: Task, note: string): void {
-	updateTask(tasksDir, { ...t, status: "open", assignee: undefined, notes: [...(t.notes ?? []), note] });
+export function releaseTask(tasksDir: string, t: Task, note: string, { retry = false } = {}): void {
+	const retries = retry ? { retries: (t.retries ?? 0) + 1 } : {};
+	updateTask(tasksDir, { ...t, status: "open", assignee: undefined, notes: [...(t.notes ?? []), note], ...retries });
 }
 
 /** Re-open tasks left claimed by a crashed run. */

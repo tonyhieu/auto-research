@@ -85,6 +85,9 @@ test("claim, release with note, and stale-claim reset", () => {
 	releaseTask(t.tasks, c1!, "interrupted");
 	const c2 = claimNextTask(t.tasks, "sub-2");
 	assert.deepEqual(c2?.notes, ["interrupted"]);
+	assert.equal(c2?.retries, undefined, "budget interruptions do not count as retries");
+	releaseTask(t.tasks, c2!, "failed", { retry: true });
+	assert.equal(claimNextTask(t.tasks, "sub-3")?.retries, 1);
 	assert.equal(resetStaleClaims(t.tasks), 1);
-	assert.equal(listTasks(t.tasks)[0].status, "open");
+	assert.deepEqual([listTasks(t.tasks)[0].status, listTasks(t.tasks)[0].retries], ["open", 1]);
 });
