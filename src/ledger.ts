@@ -22,6 +22,8 @@ export interface Finding {
 	status: FindingStatus;
 	/** Derived from novelty verdicts; only set by loadFindings. */
 	novelty?: "novel" | "known";
+	/** focus-target: a free-text focus hypothesis; a refuting focus verdict settles it. */
+	role?: "focus-target";
 }
 
 /** reproduce: an independent rerun from the written setup (focus mode only). */
@@ -43,8 +45,11 @@ export interface Verification {
 /** Only insights (and legacy unkinded entries) can rest on a computation, so only they get a reproduce check. */
 export const reproducible = (f: Finding) => f.kind !== "gap" && f.kind !== "literature";
 
-/** Gaps and insights are candidate new results; legacy unkinded entries are treated the same. */
-export const needsVerification = (f: Finding) => f.kind !== "literature";
+/**
+ * Gaps and insights are candidate new results; legacy unkinded entries are treated the same.
+ * A refuted focus target is settled by its focus verdict; any other target is still verified normally.
+ */
+export const needsVerification = (f: Finding) => f.kind !== "literature" && !(f.role === "focus-target" && f.status === "refuted");
 
 export type TaskStatus = "open" | "claimed" | "done";
 
@@ -154,12 +159,12 @@ export const focusTaskIds = (tasks: Task[], focus: string) => new Set(tasks.filt
  * Queue one verify task per gap/insight finding that has never had one. Returns how many were created.
  * With `focus`, only findings from that focus run's tasks, and the verify tasks are tagged with it.
  */
-export function enqueueVerifyTasks(t: { ledger: string; tasks: string }, focus?: string): number {
+export function enqueueVerifyTasks(t: { ledger: string; verifications: string; tasks: string }, focus?: string): number {
 	const tasks = listTasks(t.tasks);
 	const covered = new Set(tasks.map((x) => x.findingId).filter(Boolean));
 	const mine = focus ? focusTaskIds(tasks, focus) : undefined;
 	let n = 0;
-	for (const f of readFindings(t.ledger)) {
+	for (const f of loadFindings(t)) {
 		if (!needsVerification(f) || covered.has(f.id)) continue;
 		if (mine && !mine.has(f.taskId ?? "")) continue;
 		createTask(t.tasks, `Verify ${f.id}`, f.claim, { type: "verify", findingId: f.id, focus });

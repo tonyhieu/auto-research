@@ -162,6 +162,29 @@ test("focus_verdict: refutes the target, records the narrowed claim with a verif
 	assert.equal(loadFindings(t).find((f) => f.claim === "free text")?.status, "refuted");
 });
 
+test("focus_verdict: a refuted free-text target is not queued for breadth verification; a holding one is", async () => {
+	const t = ensureTopic("fvb", mkdtempSync(join(tmpdir(), "ar-")));
+	const refuter = appendFinding(t.ledger, { author: "a", kind: "gap", claim: "r", evidence: "e", sources: ["p"], status: "unverified" });
+	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: "", sources: [], by: "v" });
+	updateTask(t.tasks, { ...createTask(t.tasks, "Verify r", "d", { type: "verify", findingId: refuter.id }), status: "done" });
+	const focus = resolveFocus(t, "free text");
+	writeFileSync(focus.state, "## Verdict\nfails");
+	updateTask(t.tasks, { ...createTask(t.tasks, "x", "d", { focus: focus.key }), status: "done" });
+	await focusVerdictTool(t, focus, () => {}).execute("id", { outcome: "fails", summary: "no", sources: ["p"], refutedBy: [refuter.id] } as never, undefined, undefined, {} as never);
+	assert.equal(enqueueVerifyTasks(t), 0);
+	const target = loadFindings(t).find((f) => f.claim === "free text");
+	assert.deepEqual([target?.role, target?.status], ["focus-target", "refuted"]);
+	// A holds verdict is only an adversarial pass, so breadth still runs the remaining checks.
+	const held = resolveFocus(t, "held text");
+	writeFileSync(held.state, "## Verdict\nholds");
+	updateTask(t.tasks, { ...createTask(t.tasks, "y", "d", { focus: held.key }), status: "done" });
+	await focusVerdictTool(t, held, () => {}).execute("id", { outcome: "holds", summary: "yes", sources: ["p"] } as never, undefined, undefined, {} as never);
+	assert.equal(enqueueVerifyTasks(t), 1);
+	const ht = loadFindings(t).find((f) => f.claim === "held text");
+	assert.deepEqual([ht?.role, ht?.status], ["focus-target", "unverified"]);
+	assert.equal(listTasks(t.tasks).find((x) => x.findingId === ht?.id)?.type, "verify");
+});
+
 test("focus_verdict: a narrowed gap stays a gap", async () => {
 	const t = ensureTopic("fg", mkdtempSync(join(tmpdir(), "ar-")));
 	const base = { author: "a", evidence: "e", sources: ["p"], status: "unverified" as const };

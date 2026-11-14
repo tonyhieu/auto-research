@@ -312,7 +312,7 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus): ToolDefinitio
 			const target =
 				focus.findingId ??
 				(all.find((f) => f.author === by && f.claim === focus.target) ??
-					appendFinding(topic.ledger, { author: by, kind: "insight", claim: focus.target, evidence: p.summary, sources: p.sources, status: "unverified" })).id;
+					appendFinding(topic.ledger, { author: by, kind: "insight", role: "focus-target", claim: focus.target, evidence: p.summary, sources: p.sources, status: "unverified" })).id;
 			appendVerification(topic.verifications, {
 				findingId: target,
 				check: "adversarial",
