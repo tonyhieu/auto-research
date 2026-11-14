@@ -231,7 +231,9 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		// Focus verifiers also rerun the experiment, and get no file access so the rerun is independent.
 		const rerun = !!focus && reproducible(finding);
 		const checks = rerun ? [...BASE_CHECKS, "reproduce" as const] : BASE_CHECKS;
-		const retry = task.notes?.includes(NO_VERDICT_NOTE)
+		// The note fallback covers tasks written before `retries` existed.
+		const retrying = (task.retries ?? (task.notes?.includes(NO_VERDICT_NOTE) ? 1 : 0)) > 0;
+		const retryPrompt = retrying
 			? "\n\nA previous verifier stopped without recording any verdict. You must record every check with verify_record."
 			: "";
 		let searches = 0;
@@ -248,7 +250,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 			name,
 			model: VERIFIER_MODEL,
 			systemPrompt: verifierSystem(topic, rerun),
-			prompt: verifierPrompt(finding, prior, followUps) + retry,
+			prompt: verifierPrompt(finding, prior, followUps) + retryPrompt,
 			builtinTools: focus ? [] : ["read", "ls"],
 			tools: [
 				searchTool(() => searches++),
@@ -263,9 +265,9 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		const eff = loadFindings(topic).find((f) => f.id === finding.id);
 		log(`[${name}] ${finding.id} -> ${eff?.status}${eff?.novelty ? `, ${eff.novelty}` : ""} (${verdicts.map((v) => `${v.check}=${v.verdict}`).join(" ")}; ${searches} searches)`);
 		// A verifier that quits without any verdict gets one retry; otherwise the finding is never checked.
-		if (!r.interrupted && verdicts.length === 0 && !retry) {
+		if (!r.interrupted && verdicts.length === 0 && !retrying) {
 			log(`warning: ${name} recorded no verdicts for ${finding.id}; re-queued once`);
-			releaseTask(topic.tasks, task, NO_VERDICT_NOTE);
+			releaseTask(topic.tasks, task, NO_VERDICT_NOTE, { retry: true });
 			log(`[${name}] released; ${usageLine(r)}${sandboxLine(sandboxSec)}`);
 			return r;
 		}

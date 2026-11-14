@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentResult, AgentSpec } from "../src/agent.ts";
 import { runController } from "../src/controller.ts";
-import { appendFinding, appendVerification, createTask, listTasks } from "../src/ledger.ts";
+import { appendFinding, appendVerification, createTask, listTasks, updateTask } from "../src/ledger.ts";
 import { ensureTopic, type TopicPaths } from "../src/topic.ts";
 import type { UsageProbe } from "../src/usage.ts";
 import { resolveFocus, type Focus } from "../src/focus.ts";
@@ -143,7 +143,19 @@ test("a verifier that records no verdicts is retried exactly once, with a note",
 	const vt = listTasks(h.topic.tasks).find((t) => t.type === "verify");
 	assert.equal(vt?.status, "done");
 	assert.deepEqual(vt?.notes, ["Previous verifier recorded no verdicts."]);
+	assert.equal(vt?.retries, 1);
 	assert.ok(h.logs.some((l) => /re-queued once/.test(l)) && h.logs.some((l) => /on retry; giving up/.test(l)));
+});
+
+test("a legacy verify task with the no-verdict note and no retries field counts as retried", async () => {
+	const h = harness({ step: 12, windows: 1, silentVerifiers: true });
+	const f = appendFinding(h.topic.ledger, { author: "old", kind: "insight", claim: "x", evidence: "e", sources: ["p"], status: "unverified" });
+	const t = createTask(h.topic.tasks, `Verify ${f.id}`, f.claim, { type: "verify", findingId: f.id });
+	updateTask(h.topic.tasks, { ...t, notes: ["Previous verifier recorded no verdicts."] });
+	await h.go();
+	assert.equal(h.calls.filter((c) => c.startsWith("ver-")).length, 1, `calls: ${h.calls.join(",")}`);
+	assert.equal(listTasks(h.topic.tasks).find((x) => x.id === t.id)?.status, "done");
+	assert.ok(!h.logs.some((l) => /re-queued once/.test(l)) && h.logs.some((l) => /on retry; giving up/.test(l)));
 });
 
 test("logs per-agent token breakdown and the window's peak 5h utilization", async () => {
