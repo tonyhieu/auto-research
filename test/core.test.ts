@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseUsage } from "../src/usage.ts";
+import { parseUsage, UsageProbe } from "../src/usage.ts";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { acquireLock, ensureTopic, slugify } from "../src/topic.ts";
 import { appendFinding, createTask, listTasks, readFindings } from "../src/ledger.ts";
 
@@ -14,6 +15,24 @@ test("parseUsage prefers limits[] session entry", () => {
 	});
 	assert.equal(s?.sessionPercent, 42);
 	assert.equal(s?.sessionResetsAt.toISOString(), "2026-01-01T05:00:00.000Z");
+});
+
+test("UsageProbe.read does not back off after its last attempt", async () => {
+	const models = { getAuth: async () => ({ auth: { apiKey: "t" } }) } as unknown as ModelRuntime;
+	const sleeps: number[] = [];
+	let attempts = 0;
+	const realFetch = globalThis.fetch;
+	globalThis.fetch = async () => {
+		attempts++;
+		return new Response("", { status: 429 });
+	};
+	try {
+		assert.equal(await new UsageProbe(models, async (ms) => void sleeps.push(ms)).read(1), undefined);
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+	assert.equal(attempts, 2);
+	assert.deepEqual(sleeps, [5000]);
 });
 
 test("parseUsage falls back to five_hour and rejects empty payloads", () => {
