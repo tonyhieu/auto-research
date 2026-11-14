@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -59,4 +59,26 @@ export const BRIEF_CAP = 12_000;
 /** The topic's research brief, or "" when none was given. */
 export function readBrief(t: TopicPaths): string {
 	return existsSync(t.brief) ? readFileSync(t.brief, "utf8").trim() : "";
+}
+
+const pidAlive = (pid: number) => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return (e as NodeJS.ErrnoException).code === "EPERM"; // exists, owned by another user
+	}
+};
+
+/** Create the lock file with our pid atomically; false if a live process holds it. A stale lock is replaced once. */
+export function acquireLock(path: string, retry = true): boolean {
+	try {
+		writeFileSync(path, String(process.pid), { flag: "wx" });
+		return true;
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+	}
+	if (!retry || pidAlive(Number(readFileSync(path, "utf8")))) return false;
+	unlinkSync(path);
+	return acquireLock(path, false);
 }
