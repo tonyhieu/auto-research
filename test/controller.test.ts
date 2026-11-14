@@ -183,6 +183,44 @@ test("breadth: an epoch with no tasks gets one nudged retry, then the run ends",
 	assert.ok(h.logs.some((l) => /created no tasks twice; ending run/.test(l)));
 });
 
+test("epoch number and since are scoped to the run's mode", async () => {
+	// A breadth, B focus (written once the focus key exists), C breadth with no `focus` field (legacy shape).
+	const seed = (t: TopicPaths, key: string) =>
+		writeFileSync(
+			join(t.state, "epochs.jsonl"),
+			[
+				{ epoch: 1, ts: "2025-12-01T00:00:00.000Z", tasksCreated: 1, stateUpdated: true },
+				{ epoch: 1, ts: "2025-12-02T00:00:00.000Z", tasksCreated: 1, stateUpdated: true, focus: key },
+				{ epoch: 2, ts: "2025-12-03T00:00:00.000Z", tasksCreated: 1, stateUpdated: true },
+			]
+				.map((e) => JSON.stringify(e) + "\n")
+				.join(""),
+		);
+	const firstPrompt = async (focus: boolean) => {
+		const h = harness({
+			step: 5,
+			windows: 1,
+			tasksPerEpoch: () => 0,
+			focus: focus
+				? (t) => {
+						const f = resolveFocus(t, "free-text hypothesis");
+						seed(t, f.key);
+						return f;
+					}
+				: undefined,
+		});
+		if (!focus) seed(h.topic, "fx-other");
+		await h.go();
+		return h.specs.find((s) => s.name === "orchestrator")!.prompt;
+	};
+	const breadth = await firstPrompt(false);
+	assert.match(breadth, /^Run orchestrator epoch 3 now/);
+	assert.match(breadth, /since last epoch \(2025-12-03T00:00:00\.000Z\)/);
+	const focus = await firstPrompt(true);
+	assert.match(focus, /^Run orchestrator epoch 2 now/);
+	assert.match(focus, /since last epoch \(2025-12-02T00:00:00\.000Z\)/);
+});
+
 test("focus: reproduces the target first, scopes tasks, verifier gets reproduce and no file tools, verdict ends run", async () => {
 	const h = harness({
 		step: 5,
