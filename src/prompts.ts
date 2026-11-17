@@ -251,3 +251,56 @@ Sections:
 ## Untested, and the next experiments (concrete, ordered)
 Be concise. Then reply with the Verdict section only.`;
 }
+
+export function preprintSystem(topic: TopicPaths): string {
+	return `${COMMON}${briefBlock(topic)}
+
+You are the PRE-PRINT WRITER for the topic "${topic.title}". You turn one main finding and the findings around it into
+a short, self-contained research pre-print for a human researcher. You do not run new research: use ledger_get,
+ledger_list, paper_details (for cited paperIds only), and read on the topic's files (${topic.dir}: notes/, state/,
+reports/). Every number, claim, and paper in the pre-print must come from those sources.`;
+}
+
+export interface PreprintContext {
+	path: string;
+	slug: string;
+	main: Finding;
+	/** Findings linked to the main one: references, citing findings, and its focus run's findings. */
+	related: Finding[];
+	focus?: { key: string; started: string; state: string };
+}
+
+export function preprintPrompt(c: PreprintContext): string {
+	const row = (f: Finding) => `- ${f.id} [${[f.status, f.novelty, f.kind].filter(Boolean).join(", ")}] ${f.title ?? clip(f.claim, 160)}`;
+	const focus = c.focus
+		? `\nThe main finding came out of focus run ${c.focus.key} (started ${c.focus.started}). Its claim tree and verdict are in ${c.focus.state}.`
+		: "";
+	return `Write a pre-print of finding ${c.main.id} and its related findings to ${c.path} (write tool).
+
+# Main finding
+${row(c.main)}${focus}
+
+# Related findings
+${c.related.map(row).join("\n") || "(none linked; use ledger_list with the main claim's key terms)"}
+
+Steps:
+1. ledger_get the main finding and every related one (up to 20 ids per call) for claims, evidence, experiments, and verdicts.
+   Follow finding ids in their sources one more hop if a result depends on them. Read the focus state file if given.
+2. Leave out refuted findings except as a stated negative result, and say which statements rest on unverified findings.
+3. paper_details only the paperIds the findings cite, for titles, authors, and years.
+
+Format (Markdown, LaTeX math in $...$):
+# <Title stating the main result>
+**Status.** One paragraph: summarizes auto-research ledger results (topic \`${c.slug}\`); finding ids refer to ledger
+entries; which checks the cited findings passed (citation, adversarial, novelty, reproduce); the scale of the
+experiments (e.g. CPU toy models) and that literature claims rest on abstracts.
+## Abstract (one paragraph: problem, main result with its key numbers, the conditions it holds under, supporting results)
+## 1. Setup and notation (definitions, models, data, metrics, and methods compared; a table where it helps)
+## 2. Results (one subsection per result, main result first; heading ends with its finding ids in [brackets];
+   state each claim in the narrowed form that survived verification, then the numbers as tables with seeds and spread)
+## 3. Limitations and open questions (what was not tested, including out-of-scope items from the focus state)
+## 4. Related work (closest papers, by title and year, and how each differs)
+## References (papers cited, then finding ids with one-line titles)
+Write for a reader who has not seen the ledger: define every symbol, no agent names or task ids. Be concise.
+Then reply with the title only.`;
+}

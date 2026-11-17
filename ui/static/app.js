@@ -23,6 +23,7 @@ const state = {
   newTopic: null, // {title, brief, preview: html | null, posting, error} while the form replaces the tabs
   view: null, // {type: "finding", id} | {type: "doc", group, name} | null
   detail: null, // fetched body for `view`
+  preprints: {}, // slug -> GET /api/topics/{slug}/preprint; polled while running
   open: new Set(), // sidebar <details> keys left open by the user
   seq: 0, // guards against out-of-order detail responses
   topicListSeq: 0, // same, for refetches of /api/topics
@@ -31,6 +32,7 @@ const state = {
 const ALL_PARTS = ["ledger", "verifications", "tasks", "docs"]; // topic-changed parts (arui/events.py)
 const RUN_VERB = { complete: "finished", signal: "stopped", error: "failed", lost: "lost" };
 const FINDING_ID = /^f-[0-9a-f]{8}$/;
+const PREPRINT_POLL_MS = 5000;
 // A free-text focus target becomes a finding claim: FindingInput.claim length limits in arui/models.py.
 const CLAIM_MIN = 20;
 const CLAIM_MAX = 1000;
@@ -115,6 +117,7 @@ async function route() {
       const loaded = await Promise.all([api(`/api/topics/${encodeURIComponent(slug)}`), api(`/api/topics/${encodeURIComponent(slug)}/docs`)]);
       if (parseHash().slug !== slug) return; // a later route() owns the page now
       [state.topic, state.docs] = loaded;
+      loadPreprint(slug);
     } catch (e) {
       if (parseHash().slug !== slug) return;
       state.view = null;
@@ -292,14 +295,51 @@ function renderStrip() {
 }
 
 function toast(d) {
-  const title = state.topics.find((t) => t.slug === d.slug)?.title ?? d.slug;
   const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
+  notify(d.slug, d.reason, `${esc(d.mode)} run ${esc(RUN_VERB[d.reason] ?? d.reason)}: ${n(d.newFindings, "new finding")}, ${n(d.newVerifications, "verdict")}`);
+}
+
+// `cls` is a toast color class (complete, error, lost, signal); `html` is already escaped.
+function notify(slug, cls, html) {
+  const title = state.topics.find((t) => t.slug === slug)?.title ?? slug;
   const el = document.createElement("div");
-  el.className = `toast ${d.reason}`;
-  el.innerHTML = `<b>${esc(title)}</b>${esc(d.mode)} run ${esc(RUN_VERB[d.reason] ?? d.reason)}: ${n(d.newFindings, "new finding")}, ${n(d.newVerifications, "verdict")}`;
+  el.className = `toast ${cls}`;
+  el.innerHTML = `<b>${esc(title)}</b>${html}`;
   el.onclick = () => el.remove();
   $("toasts").append(el);
   setTimeout(() => el.remove(), 10000);
+}
+
+async function loadPreprint(slug) {
+  let s;
+  try {
+    s = await api(`/api/topics/${encodeURIComponent(slug)}/preprint`);
+  } catch {
+    return; // the next poll retries
+  }
+  const was = state.preprints[slug];
+  state.preprints[slug] = s;
+  if (was?.running && !s.running) {
+    if (s.exitCode === 0) notify(slug, "complete", `Pre-print written: <code>${esc(s.path)}</code>`);
+    else notify(slug, "error", `Pre-print failed (exit ${esc(s.exitCode)}); see topics/.ui/${esc(slug)}-preprint-*.out`);
+  }
+  if (slug === state.slug) renderFoot();
+}
+
+async function startPreprint() {
+  const slug = state.slug;
+  state.preprints[slug] = { running: true, path: null, exitCode: null };
+  renderFoot();
+  const r = await post(`/api/topics/${encodeURIComponent(slug)}/preprint`, {});
+  if (r.ok) {
+    state.preprints[slug] = r.body;
+    notify(slug, "complete", `Writing a pre-print of ${esc(r.body.findingId)} to <code>${esc(r.body.path)}</code>`);
+  } else {
+    state.preprints[slug] = { running: false, path: null, exitCode: null };
+    const d = r.body?.detail;
+    notify(slug, "error", `Pre-print not started: ${esc(typeof d === "string" ? d : (d?.error ?? `request failed (${r.status})`))}`);
+  }
+  if (slug === state.slug) renderFoot();
 }
 
 function renderMain(error) {
@@ -451,9 +491,21 @@ function syncNewTopic() {
   $("nt-create").textContent = n.posting ? "Starting..." : "Create and start breadth run";
 }
 
+function preprintButton() {
+  const fid = state.topic?.mainHypothesis?.findingId;
+  const running = state.preprints[state.slug]?.running;
+  const title = fid ? `Summarize ${fid} and its related findings into pre-prints/${state.slug}/` : "No main finding to summarize yet";
+  return `<button class="btn2" data-act="preprint" title="${esc(title)}"${!fid || running ? " disabled" : ""}>${running ? "Writing pre-print..." : "Pre-print"}</button>`;
+}
+
 function footHtml() {
+  if (state.tab !== "inspector") return `<span></span>${preprintButton()}`;
   const ids = state.selection.map((id) => `<code>${esc(id)}</code>`).join(" ");
-  return `<span>${ids ? `Selected: ${ids}` : "No findings selected"}</span><button class="btn" data-act="edit-start">Edit and start</button>`;
+  return `<span>${ids ? `Selected: ${ids}` : "No findings selected"}</span><button class="btn" data-act="edit-start">Edit and start</button>${preprintButton()}`;
+}
+
+function renderFoot() {
+  $("foot").innerHTML = state.newTopic === null && state.topic ? footHtml() : "";
 }
 
 function renderPane(keepScroll = false) {
@@ -470,7 +522,7 @@ function renderPane(keepScroll = false) {
   else if (state.detail.error) body = `<div class="warn">${esc(state.detail.error)}</div>`;
   else body = `<article class="dv"><div class="dvi">${state.view.type === "finding" ? findingHtml(state.detail) : docHtml(state.detail)}</div></article>`;
   $("pane").innerHTML = body;
-  $("foot").innerHTML = !form && state.tab === "inspector" ? footHtml() : "";
+  renderFoot();
   if (!keepScroll) $("pane").parentElement.scrollTop = 0;
   syncRunControls();
   syncNewTopic();
@@ -551,6 +603,8 @@ function action(el) {
       return startRun();
     case "stop":
       return stopRun();
+    case "preprint":
+      return startPreprint();
     case "pick":
       state.mode = "focus";
       return setPicked(id, true);
@@ -640,6 +694,10 @@ document.addEventListener("input", (e) => {
 });
 
 window.addEventListener("hashchange", route);
+
+setInterval(() => {
+  for (const [slug, s] of Object.entries(state.preprints)) if (s.running) loadPreprint(slug);
+}, PREPRINT_POLL_MS);
 
 // EventSource reconnects on its own; refetch on reconnect so missed events do not matter.
 const es = new EventSource("/api/events");

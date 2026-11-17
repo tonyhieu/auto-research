@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from test_api import SLUG, topics  # noqa: F401 (fixture)
+from test_api import SLUG, jsonl, topics, v  # noqa: F401 (fixture)
 
 from arui import runs
 from arui.runs import REPO, compose_target, slugify
@@ -38,9 +38,9 @@ def stub(tmp_path_factory, monkeypatch):
 
 @pytest.fixture
 def app(topics, stub):  # noqa: F811
-    app = create_app(Store(topics), research=stub / "research")
+    app = create_app(Store(topics), research=stub / "research", preprint=stub / "research")
     yield app
-    for p in app.state.launcher.procs.values():
+    for p in [*app.state.launcher.procs.values(), *(p for p, _ in app.state.launcher.preprints.values())]:
         p.kill()
 
 
@@ -206,3 +206,23 @@ def test_grace_wait_does_not_hold_the_mutex(app, client, monkeypatch):
     assert app.state.launcher.mutex.acquire(timeout=0.5), "another topic could start meanwhile"
     app.state.launcher.mutex.release()
     t.join()
+
+
+def test_preprint(client, stub, topics, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(runs, "PREPRINTS", topics.parent / "pre-prints")
+    assert client.get(f"/api/topics/{SLUG}/preprint").json() == {"running": False, "exitCode": None, "path": None}
+    assert client.post(f"/api/topics/{SLUG}/preprint", json={}).status_code == 422, "main hypothesis is only a heading"
+    focus = {"key": "fx-00000001", "outcome": "holds_with_limits", "narrowedFindingId": "f-22222222"}
+    with open(topics / SLUG / "verifications.jsonl", "a") as f:
+        f.write(jsonl(v(6, "f-89abcdef", "adversarial", "pass", "2026-11-10T00:00:00Z", focus=focus)))
+    r = client.post(f"/api/topics/{SLUG}/preprint", json={})
+    assert r.status_code == 202 and r.json()["running"] and r.json()["findingId"] == "f-22222222"
+    args = call(stub)["args"]
+    assert args[:4] == ["-t", "Demo Topic", "-f", "f-22222222"] and args[4] == "-o" and args[6:] == ["-k", "fx-00000001"]
+    assert args[5].startswith(str(topics.parent / "pre-prints" / SLUG / "pre-print-")) and args[5].endswith(".md")
+    assert r.json()["path"].startswith(f"pre-prints/{SLUG}/pre-print-")
+    assert client.post(f"/api/topics/{SLUG}/preprint", json={}).status_code == 409, "one pre-print at a time"
+    proc = client.app.state.launcher.preprints[SLUG][0]
+    proc.kill()
+    proc.wait()
+    assert not client.get(f"/api/topics/{SLUG}/preprint").json()["running"]
