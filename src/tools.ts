@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFileSync, writeFileSync } from "node:fs";
-import { SCOPE_TAGS, claimTreeIds, scopeProblems, verdictRecorded, type Focus } from "./focus.ts";
+import { FINDING_ID, SCOPE_TAGS, claimTreeIds, scopeProblems, verdictRecorded, type Focus } from "./focus.ts";
 import {
 	appendFinding,
 	appendVerification,
@@ -17,6 +17,7 @@ import {
 	type VerificationCheck,
 } from "./ledger.ts";
 import { runPython } from "./sandbox.ts";
+import { findingFields, findingInputParams, RATIONALE_MAX, verdictInputParams } from "./schema.ts";
 import { formatPaper, getPaper, searchPapers } from "./s2.ts";
 import type { TopicPaths } from "./topic.ts";
 
@@ -31,6 +32,10 @@ export const NOVELTY_MIN_PAPERS = 5;
 
 /** "[verified, novel, insight]" style tag shown in ledger views. */
 const tag = (f: Finding) => `[${[f.status, f.novelty, f.kind].filter(Boolean).join(", ")}]`;
+
+/** Experiment block for full-finding views; empty when the finding has none. */
+export const experimentText = (f: Pick<Finding, "experiment">) =>
+	f.experiment ? `\nExperiment setup: ${f.experiment.setup}\nExperiment results: ${f.experiment.results}` : "";
 
 /** paper_search; `onSearch` lets a caller count calls (verifiers must actually search before a novelty verdict). */
 export function searchTool(onSearch?: () => void) {
@@ -85,18 +90,10 @@ export function ledgerTools(topic: TopicPaths, author: string, taskId?: string) 
 		name: "ledger_add",
 		label: "Add finding",
 		description:
-			"Record one atomic finding in the shared research ledger. Every claim must cite sources (paperIds) you actually retrieved. Gaps and insights are independently verified later (citations, refutation attempt, novelty search).",
-		parameters: Type.Object({
-			kind: Type.Union([Type.Literal("literature"), Type.Literal("gap"), Type.Literal("insight")], {
-				description:
-					"literature: what the cited papers show. gap: an absence claim (no paper among those checked does X). insight: your own inference, hypothesis, or prediction.",
-			}),
-			claim: Type.String({ description: "One atomic, checkable claim" }),
-			evidence: Type.String({ description: "Why the sources support the claim; quote or paraphrase specifics" }),
-			sources: Type.Array(Type.String(), { minItems: 1 }),
-		}),
+			"Record one atomic finding in the shared research ledger. Every claim must cite sources (paperIds or finding ids) you actually retrieved. Gaps and insights are independently verified later (citations, refutation attempt, novelty search). kind: literature = what the cited papers show; gap = an absence claim (no paper among those checked does X); insight = your own inference, hypothesis, or prediction.",
+		parameters: findingInputParams,
 		async execute(_id, p) {
-			const f = appendFinding(topic.ledger, { author, taskId, ...p, status: "unverified" });
+			const f = appendFinding(topic.ledger, { author, taskId, ...p, experiment: p.experiment ?? undefined, status: "unverified" });
 			return text(`Recorded ${f.id}.`);
 		},
 	});
@@ -104,7 +101,7 @@ export function ledgerTools(topic: TopicPaths, author: string, taskId?: string) 
 		name: "ledger_list",
 		label: "List findings",
 		description:
-			"Search findings recorded by all agents. Pass a keyword `query` to rank by relevance (otherwise newest first); filter by status, taskId, or since. Claims are truncated; use ledger_get for full evidence. Check this before researching to avoid duplicate work.",
+			"Search findings recorded by all agents. Pass a keyword `query` to rank by relevance (otherwise newest first); filter by status, taskId, or since. Rows show titles; use ledger_get for the claim and evidence. Check this before researching to avoid duplicate work.",
 		parameters: Type.Object({
 			query: Type.Optional(Type.String({ description: "Keywords, e.g. 'consistency model sampling steps'" })),
 			status: Type.Optional(Type.Union([Type.Literal("unverified"), Type.Literal("verified"), Type.Literal("refuted")])),
@@ -118,7 +115,8 @@ export function ledgerTools(topic: TopicPaths, author: string, taskId?: string) 
 			const { items, matched } = queryFindings(all, { ...p, limit: Math.min(p.limit ?? 20, MAX_LIST) });
 			const head = `Showing ${items.length} of ${matched} matching (${all.length} total).`;
 			const lines = items.map(
-				(f) => `${f.id} ${tag(f)}${f.taskId ? ` (${f.taskId})` : ""} ${clip(f.claim, CLAIM_CHARS)} (sources: ${f.sources.join(", ")})`,
+				// Lines written before the v2 schema have no title until the ledger is migrated.
+				(f) => `${f.id} ${tag(f)}${f.taskId ? ` (${f.taskId})` : ""} ${f.title ?? clip(f.claim, CLAIM_CHARS)} (sources: ${f.sources.join(", ")})`,
 			);
 			return text([head, ...lines].join("\n"));
 		},
@@ -126,7 +124,7 @@ export function ledgerTools(topic: TopicPaths, author: string, taskId?: string) 
 	const get = defineTool({
 		name: "ledger_get",
 		label: "Get findings",
-		description: "Fetch full findings (claim, evidence, sources, author, task) by id.",
+		description: "Fetch full findings (title, claim, evidence, experiment, sources, author, task) by id.",
 		parameters: Type.Object({ ids: Type.Array(Type.String(), { minItems: 1, maxItems: 20 }) }),
 		async execute(_id, p) {
 			const want = new Set(p.ids);
@@ -135,7 +133,7 @@ export function ledgerTools(topic: TopicPaths, author: string, taskId?: string) 
 			const missing = p.ids.filter((id) => !fs.some((f) => f.id === id));
 			const body = fs.map(
 				(f) =>
-					`${f.id} ${tag(f)} by ${f.author}${f.taskId ? ` for ${f.taskId}` : ""} at ${f.ts}\nClaim: ${f.claim}\nEvidence: ${f.evidence}\nSources: ${f.sources.join(", ")}` +
+					`${f.id} ${tag(f)} by ${f.author}${f.taskId ? ` for ${f.taskId}` : ""} at ${f.ts}${f.title ? `\nTitle: ${f.title}` : ""}\nClaim: ${f.claim}\nEvidence: ${f.evidence}${experimentText(f)}\nSources: ${f.sources.join(", ")}` +
 					vs
 						.filter((v) => v.findingId === f.id)
 						.map((v) => `\nCheck ${v.check}: ${v.verdict} (${v.by}) ${clip(v.rationale, 400)}`)
@@ -171,13 +169,9 @@ export function verifyTool(
 		name: "verify_record",
 		label: "Record verdict",
 		description: `Record one check's verdict for finding ${findingId}. Call once per check (${checks.join(", ")}). Any novelty verdict requires at least ${NOVELTY_MIN_SEARCHES} paper_search calls in this session first. For novelty, pass means no checked paper anticipates the claim; list every paper you checked in sources (at least ${NOVELTY_MIN_PAPERS}) and the queries you ran in the rationale.`,
-		parameters: Type.Object({
-			check: Type.Union(checks.map((c) => Type.Literal(c))),
-			verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("inconclusive")]),
-			rationale: Type.String({ description: "Specific reasons: quotes, counterexamples, computation results, queries run" }),
-			sources: Type.Array(Type.String(), { description: "paperIds checked or supporting the verdict" }),
-		}),
-		async execute(_id, p) {
+		parameters: verdictInputParams(checks),
+		async execute(_id, input) {
+			const p = { ...input, sources: input.sources ?? [] };
 			if (p.check === "novelty" && searches() < NOVELTY_MIN_SEARCHES) {
 				throw new Error(
 					`A novelty verdict (including inconclusive) needs at least ${NOVELTY_MIN_SEARCHES} paper_search calls for prior work; you have made ${searches()}. Run paraphrased queries and related-terms searches first.`,
@@ -255,6 +249,12 @@ export function makePythonTool({ maxSec = 300, budgetSec = Infinity, onRun, run 
 }
 
 
+/** Room for the "Focus fx-... verdict: <outcome>. " prefix within the rationale limit. */
+const SUMMARY_MAX = RATIONALE_MAX - 100;
+
+/** A FindingInput property schema with a tool-specific description, so focus_verdict shares the ledger limits. */
+const field = <T>(name: string, description: string) => Type.Unsafe<T>({ ...findingFields[name], description });
+
 /**
  * Write a focus run's outcome back to the ledger: a verdict on the target (a free-text hypothesis becomes a
  * finding first), plus an optional narrowed claim queued for verification. Once per focus, and only after
@@ -266,14 +266,19 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus): ToolDefinitio
 		name: "focus_verdict",
 		label: "Record focus verdict",
 		description:
-			"Record the final verdict on the hypothesis in the ledger, in the same epoch you write ## Verdict. holds: the claim stands as written (caveats already stated in the claim do not make it holds_with_limits). holds_with_limits: part of it is refuted; give the surviving narrowedClaim. fails: the main effect does not hold (narrowedClaim optional). For holds_with_limits and fails, list in refutedBy the settled (verified or refuted) findings that show which part is wrong. The target finding is marked refuted unless the outcome is holds; the narrowed claim becomes a new finding and is independently verified.",
+			"Record the final verdict on the hypothesis in the ledger, in the same epoch you write ## Verdict. holds: the claim stands as written (caveats already stated in the claim do not make it holds_with_limits). holds_with_limits: part of it is refuted; give the surviving narrowedClaim. fails: the main effect does not hold (narrowedClaim optional). For holds_with_limits and fails, list in refutedBy the settled (verified or refuted) findings that show which part is wrong. The target finding is marked refuted unless the outcome is holds; the narrowed claim becomes a new finding and is independently verified. A free-text hypothesis needs targetTitle; a narrowedClaim needs narrowedTitle.",
 		parameters: Type.Object({
 			outcome: Type.Union([Type.Literal("holds"), Type.Literal("holds_with_limits"), Type.Literal("fails")]),
-			summary: Type.String({ description: "Which sub-claims held and which were refuted, with finding ids" }),
-			narrowedClaim: Type.Optional(Type.String({ description: "The claim that survives, stated so it can be checked on its own" })),
-			evidence: Type.Optional(Type.String({ description: "For the narrowed claim: setup and numbers, citing the finding ids it rests on" })),
-			sources: Type.Array(Type.String(), { description: "paperIds and finding ids the verdict rests on", minItems: 1 }),
-			refutedBy: Type.Optional(Type.Array(Type.String(), { description: "Settled finding ids showing which part is wrong (required unless holds)" })),
+			// The summary goes into the verdict's rationale (after a short prefix) and a free-text target's evidence.
+			summary: Type.String({ minLength: 40, maxLength: SUMMARY_MAX, description: "Markdown. Which sub-claims held and which were refuted, with finding ids" }),
+			targetTitle: Type.Optional(field<string>("title", "Short headline for the hypothesis; required when it is free text rather than a ledger finding")),
+			narrowedTitle: Type.Optional(field<string>("title", "Short headline for the narrowed claim; required with narrowedClaim")),
+			narrowedClaim: Type.Optional(field<string>("claim", "The claim that survives, stated so it can be checked on its own (one line)")),
+			evidence: Type.Optional(field<string>("evidence", "Markdown. For the narrowed claim: setup and numbers, citing the finding ids it rests on")),
+			sources: field<string[]>("sources", "paperIds and finding ids the verdict rests on"),
+			refutedBy: Type.Optional(
+				Type.Array(Type.String({ pattern: FINDING_ID.source }), { description: "Settled finding ids showing which part is wrong (required unless holds)" }),
+			),
 		}),
 		async execute(_id, p) {
 			if (verdictRecorded(topic, focus)) throw new Error("The focus verdict was already recorded.");
@@ -312,11 +317,34 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus): ToolDefinitio
 					`The verdict cites unverified findings: ${pending.join(", ")}${queued.length ? ` (re-verification queued for ${queued.join(", ")})` : " (verification already queued)"}. Remove ## Verdict from your state and end this epoch; write the verdict again once they are settled.`,
 				);
 			}
-			const all = readFindings(topic.ledger);
+			if (p.narrowedClaim && !p.narrowedTitle) throw new Error("narrowedClaim needs a narrowedTitle.");
+			const existing = focus.findingId ?? readFindings(topic.ledger).find((f) => f.author === by && f.claim === focus.target)?.id;
+			if (!existing && !p.targetTitle) throw new Error("The hypothesis is free text, so it becomes a finding: pass targetTitle.");
+			// All checks are done; write the target, the narrowed claim, then the verdict that links them.
 			const target =
-				focus.findingId ??
-				(all.find((f) => f.author === by && f.claim === focus.target) ??
-					appendFinding(topic.ledger, { author: by, kind: "insight", role: "focus-target", claim: focus.target, evidence: p.summary, sources: p.sources, status: "unverified" })).id;
+				existing ??
+				appendFinding(topic.ledger, {
+					author: by,
+					kind: "insight",
+					role: "focus-target",
+					title: p.targetTitle!,
+					claim: focus.target,
+					evidence: p.summary,
+					sources: p.sources,
+					status: "unverified",
+				}).id;
+			const narrowed = p.narrowedClaim
+				? appendFinding(topic.ledger, {
+						author: by,
+						// A narrowed gap is still a gap: no computation to rerun.
+						kind: loaded.get(target)?.kind ?? "insight",
+						title: p.narrowedTitle!,
+						claim: p.narrowedClaim,
+						evidence: p.evidence ?? p.summary,
+						sources: p.sources,
+						status: "unverified",
+					})
+				: undefined;
 			appendVerification(topic.verifications, {
 				findingId: target,
 				check: "adversarial",
@@ -324,22 +352,11 @@ export function focusVerdictTool(topic: TopicPaths, focus: Focus): ToolDefinitio
 				rationale: `Focus ${focus.key} verdict: ${p.outcome}. ${p.summary}`,
 				sources: p.sources,
 				by,
+				focus: { key: focus.key, outcome: p.outcome, ...(narrowed ? { narrowedFindingId: narrowed.id } : {}) },
 			});
-			let narrowed = "";
-			if (p.narrowedClaim) {
-				// A narrowed gap is still a gap: no computation to rerun.
-				const f = appendFinding(topic.ledger, {
-					author: by,
-					kind: loaded.get(target)?.kind ?? "insight",
-					claim: p.narrowedClaim,
-					evidence: p.evidence ?? p.summary,
-					sources: p.sources,
-					status: "unverified",
-				});
-				createTask(topic.tasks, `Verify ${f.id}`, f.claim, { type: "verify", findingId: f.id, focus: focus.key });
-				narrowed = ` Narrowed claim recorded as ${f.id}; verification queued.`;
-			}
-			return text(`Recorded ${p.outcome} on ${target}.${narrowed}`);
+			if (!narrowed) return text(`Recorded ${p.outcome} on ${target}.`);
+			createTask(topic.tasks, `Verify ${narrowed.id}`, narrowed.claim, { type: "verify", findingId: narrowed.id, focus: focus.key });
+			return text(`Recorded ${p.outcome} on ${target}. Narrowed claim recorded as ${narrowed.id}; verification queued.`);
 		},
 	});
 }

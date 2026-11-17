@@ -7,6 +7,7 @@ import { FINDING_ID, resolveFocus } from "./focus.ts";
 import { readFindings, resetStaleClaims } from "./ledger.ts";
 import { recordRunEnd, recordRunStart } from "./runs.ts";
 import { setPaperCache } from "./s2.ts";
+import { claimErrors } from "./schema.ts";
 import { killAllSandboxes } from "./sandbox.ts";
 import { acquireLock, BRIEF_CAP, ensureTopic, readBrief, REPO_ROOT } from "./topic.ts";
 import { UsageProbe } from "./usage.ts";
@@ -54,6 +55,12 @@ if (target !== undefined && !target) {
 }
 if (target && FINDING_ID.test(target) && !readFindings(topic.ledger).some((f) => f.id === target)) {
 	console.error(`finding ${target} is not in ${topic.ledger}`);
+	process.exit(2);
+}
+// Free text becomes the focus-target finding's claim, so it must pass the claim schema up front.
+const claimProblems = target && !FINDING_ID.test(target) ? claimErrors(target) : [];
+if (claimProblems.length) {
+	console.error(`-f hypothesis cannot be a finding claim: ${claimProblems.join("; ")}`);
 	process.exit(2);
 }
 

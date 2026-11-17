@@ -1,7 +1,7 @@
 import { readBrief, type TopicPaths } from "./topic.ts";
 import type { Finding, Objection, Task, Verification } from "./ledger.ts";
 import { SCOPE_TAGS, type Focus } from "./focus.ts";
-import { STATE_CAP } from "./tools.ts";
+import { experimentText, STATE_CAP } from "./tools.ts";
 
 const COMMON = `You are part of an automated research system looking for genuinely new insights on a research topic.
 Rules:
@@ -51,9 +51,9 @@ Each epoch:
 function focusTarget(focus: Focus, finding?: Finding, verdicts: Verification[] = []): string {
 	if (!finding) return `Hypothesis (from the human researcher): ${focus.target}`;
 	const vs = verdicts.map((v) => `- ${v.check}=${v.verdict} (${v.by}): ${clip(v.rationale, 400)}`).join("\n");
-	return `Finding ${finding.id} [${[finding.status, finding.novelty].filter(Boolean).join(", ")}]
+	return `Finding ${finding.id} [${[finding.status, finding.novelty].filter(Boolean).join(", ")}]${finding.title ? `\nTitle: ${finding.title}` : ""}
 Claim: ${finding.claim}
-Evidence: ${finding.evidence}
+Evidence: ${finding.evidence}${experimentText(finding)}
 Sources: ${finding.sources.join(", ")}${vs ? `\nVerdicts so far:\n${vs}` : ""}`;
 }
 
@@ -143,8 +143,8 @@ ${c.state.trim()}`;
 
 /** Focus-mode findings are rerun by a verifier who sees only the ledger text. */
 const FOCUS_SUBAGENT = `
-- FOCUS mode: an independent verifier will rerun your experiment from your ledger evidence alone. The evidence must
-  give the full setup: data generation, model, hyperparameters, seeds, metrics, and the exact numbers you got.
+- FOCUS mode: an independent verifier will rerun your experiment from your ledger entry alone. experiment.setup must
+  give the full setup (data generation, model, hyperparameters, seeds, metrics); experiment.results the exact numbers.
 - For a replicate task, work from the ledger text only; do not read the original author's notes or code.`;
 
 export function subagentSystem(topic: TopicPaths, focus = false): string {
@@ -156,8 +156,10 @@ You are a RESEARCH SUBAGENT for the topic "${topic.title}". You work on exactly 
 - Record each atomic finding with ledger_add, citing paperIds, and set kind honestly: literature (papers show it),
   gap (e.g. "No paper among the top results for X evaluates Y", with the papers you checked as sources), or
   insight (your own inference, hypothesis, or prediction). Gaps and insights are checked by an independent verifier.
-- Use python_run for quick numeric/symbolic sanity checks or toy experiments behind an insight; report the result
-  in the evidence.
+- Each finding has a short title and one atomic claim on a single line. Write the evidence in Markdown: bullets for
+  what each source shows, and results as a table.
+- Use python_run for quick numeric/symbolic sanity checks or toy experiments behind an insight. Optionally put a
+  rerunnable setup and its results in \`experiment\` (Markdown; results as a table with n/seeds and spread).
 - Optionally write a longer note to notes/<task-id>.md.
 - Finish with a short summary: findings recorded, most promising lead, and what to look at next.${focus ? FOCUS_SUBAGENT : ""}`;
 }
@@ -172,7 +174,7 @@ export function subagentPrompt(task: Task): string {
 /** Fourth check for focus-mode verifiers. */
 const REPRODUCE_CHECK = `
 4. reproduce: if the claim rests on a computation or experiment, reimplement it yourself with python_run from the
-   setup written in the evidence (you have no access to the author's files). Another finding's rerun does not
+   experiment setup, or the evidence if it has none (you have no access to the author's files). Another finding's rerun does not
    count; every reproduce verdict needs your own run. Use the author's seeds if it fits the time cap; otherwise fewer seeds or
    a smaller n, and say so. pass if your numbers match the claimed effect in direction and rough size; fail if they contradict it;
    inconclusive only if your attempt shows the setup is too underspecified to rerun (say what is missing). If the
@@ -196,6 +198,7 @@ to find out whether it holds up, not to defend it. Run ${reproduce ? "four" : "t
 3. novelty: search for prior work that already states or tests the claim (at least 3 paraphrased queries, plus
    related terms). fail if any paper anticipates it (cite it); pass only if none of the papers checked does.
    For literature-only claims, record novelty as inconclusive.${reproduce ? REPRODUCE_CHECK : ""}
+Write each rationale in Markdown (quotes, counterexamples, numbers as a table, queries run).
 Be skeptical and concrete. Then reply with one line per check.`;
 }
 
@@ -207,11 +210,11 @@ export function verifierPrompt(f: Finding, prior: Verification[] = [], followUps
 				: "") +
 			"\nDecide whether the new evidence resolves the earlier objections. Record every check again."
 		: "";
-	return `Verify finding ${f.id} (kind: ${f.kind ?? "unspecified"}, by ${f.author}).
+	return `Verify finding ${f.id} (kind: ${f.kind ?? "unspecified"}, by ${f.author}).${f.title ? `\n\nTitle: ${f.title}` : ""}
 
 Claim: ${f.claim}
 
-Evidence given: ${f.evidence}
+Evidence given: ${f.evidence}${experimentText(f)}
 
 Sources cited: ${f.sources.join(", ")}${history}`;
 }

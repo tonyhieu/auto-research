@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { PAPER, VALID, why } from "./records.ts";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,7 +61,7 @@ function harness(opts: {
 		}
 		const fid = /^Verify finding (f-\S+)/.exec(spec.prompt)?.[1];
 		if (fid && !opts.silentVerifiers) {
-			appendVerification(topic.verifications, { findingId: fid, check: "citation", verdict: "pass", rationale: "r", sources: [], by: spec.name });
+			appendVerification(topic.verifications, { findingId: fid, check: "citation", verdict: "pass", rationale: why("r"), sources: [], by: spec.name });
 		}
 		const respond = () => {
 			five = Math.min(100, five + opts.step);
@@ -131,7 +132,7 @@ test("two windows: summary each window, one sleep until reset, then resume", asy
 test("research findings get verified: verify task queued, claimed by a verifier, not counted as research", async () => {
 	const h = harness({ step: 12, windows: 1 });
 
-	appendFinding(h.topic.ledger, { author: "old", kind: "insight", claim: "x", evidence: "e", sources: ["p"], status: "unverified" });
+	appendFinding(h.topic.ledger, { ...VALID, author: "old", kind: "insight", claim: "x is the claim under test", status: "unverified" });
 	await h.go();
 	const verifiers = h.calls.filter((c) => c.startsWith("ver-"));
 	assert.equal(verifiers.length, 1, `calls: ${h.calls.join(",")}`);
@@ -144,7 +145,7 @@ test("research findings get verified: verify task queued, claimed by a verifier,
 
 test("a verifier that records no verdicts is retried exactly once, with a note", async () => {
 	const h = harness({ step: 12, windows: 1, silentVerifiers: true });
-	appendFinding(h.topic.ledger, { author: "old", kind: "insight", claim: "x", evidence: "e", sources: ["p"], status: "unverified" });
+	appendFinding(h.topic.ledger, { ...VALID, author: "old", kind: "insight", claim: "x is the claim under test", status: "unverified" });
 	await h.go();
 	assert.equal(h.calls.filter((c) => c.startsWith("ver-")).length, 2, `calls: ${h.calls.join(",")}`);
 	const vt = listTasks(h.topic.tasks).find((t) => t.type === "verify");
@@ -156,7 +157,7 @@ test("a verifier that records no verdicts is retried exactly once, with a note",
 
 test("a legacy verify task with the no-verdict note and no retries field counts as retried", async () => {
 	const h = harness({ step: 12, windows: 1, silentVerifiers: true });
-	const f = appendFinding(h.topic.ledger, { author: "old", kind: "insight", claim: "x", evidence: "e", sources: ["p"], status: "unverified" });
+	const f = appendFinding(h.topic.ledger, { ...VALID, author: "old", kind: "insight", claim: "x is the claim under test", status: "unverified" });
 	const t = createTask(h.topic.tasks, `Verify ${f.id}`, f.claim, { type: "verify", findingId: f.id });
 	updateTask(h.topic.tasks, { ...t, notes: ["Previous verifier recorded no verdicts."] });
 	await h.go();
@@ -245,7 +246,7 @@ test("focus: reproduces the target first, scopes tasks, verifier gets reproduce 
 		step: 5,
 		windows: 1,
 		focus: (t) => {
-			const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "target", evidence: "e", sources: ["p"], status: "unverified" });
+			const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "target is the claim under test", status: "unverified" });
 			// A breadth task that the focus run must not claim.
 			createTask(t.tasks, "breadth leftover", "d");
 			return resolveFocus(t, f.id);
@@ -254,7 +255,7 @@ test("focus: reproduces the target first, scopes tasks, verifier gets reproduce 
 			if (e !== 1) return;
 			writeFileSync(h.focus!.state, "## Claim tree\nC1 reproduced\n## Verdict\nholds");
 			const tool = spec.tools.find((t) => t.name === "focus_verdict")!;
-			await tool.execute("id", { outcome: "holds", summary: "C1 reproduced", sources: ["p"] } as never, undefined, undefined, {} as never);
+			await tool.execute("id", { outcome: "holds", summary: why("C1 reproduced"), sources: [PAPER] } as never, undefined, undefined, {} as never);
 		},
 		tasksPerEpoch: (e) => (e === 0 ? 2 : 0),
 	});
@@ -280,7 +281,7 @@ test("focus: gap findings are verified without a reproduce check", async () => {
 		step: 5,
 		windows: 1,
 		focus: (t) => {
-			const f = appendFinding(t.ledger, { author: "a", kind: "gap", claim: "no paper does X", evidence: "e", sources: ["p"], status: "unverified" });
+			const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "gap", claim: "no paper does X is the claim under test", status: "unverified" });
 			return resolveFocus(t, f.id);
 		},
 		onOrchestrate: () => writeFileSync(h.focus!.state, "## Verdict\nholds"),
@@ -316,7 +317,7 @@ test("focus: a verdict citing unverified findings is sent back twice, with re-ve
 		windows: 1,
 		silentVerifiers: true,
 		focus: (t) => {
-			const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+			const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 			cited = f.id;
 			return resolveFocus(t, "free-text hypothesis");
 		},
@@ -357,7 +358,7 @@ test("focus: a verdict before any research is refused and sent back with a no-re
 		onOrchestrate: async (_e, spec) => {
 			writeFileSync(h.focus!.state, "## Claim tree\nC1 holds\n## Verdict\nholds");
 			const tool = spec.tools.find((t) => t.name === "focus_verdict")!;
-			await assert.rejects(() => tool.execute("id", { outcome: "holds", summary: "s", sources: ["p"] } as never, undefined, undefined, {} as never));
+			await assert.rejects(() => tool.execute("id", { outcome: "holds", summary: why("s"), sources: [PAPER] } as never, undefined, undefined, {} as never));
 		},
 		tasksPerEpoch: () => 0,
 	});
@@ -372,9 +373,9 @@ test("focus: a rerun after the verdict is recorded never plans and drains open v
 		windows: 1,
 		focus: (t) => {
 			const f = resolveFocus(t, "free-text hypothesis");
-			const target = appendFinding(t.ledger, { author: `focus-${f.key}`, kind: "insight", claim: f.target, evidence: "e", sources: ["p"], status: "unverified" });
-			appendVerification(t.verifications, { findingId: target.id, check: "adversarial", verdict: "fail", rationale: "r", sources: [], by: `focus-${f.key}` });
-			const n = appendFinding(t.ledger, { author: `focus-${f.key}`, kind: "insight", claim: "narrowed", evidence: "e", sources: ["p"], status: "unverified" });
+			const target = appendFinding(t.ledger, { ...VALID, author: `focus-${f.key}`, kind: "insight", claim: f.target, status: "unverified" });
+			appendVerification(t.verifications, { findingId: target.id, check: "adversarial", verdict: "fail", rationale: why("r"), sources: [], by: `focus-${f.key}` });
+			const n = appendFinding(t.ledger, { ...VALID, author: `focus-${f.key}`, kind: "insight", claim: "narrowed is the claim under test", status: "unverified" });
 			createTask(t.tasks, `Re-verify ${n.id}`, n.claim, { type: "verify", findingId: n.id, focus: f.key });
 			return f;
 		},
@@ -392,9 +393,9 @@ test("focus: after focus_verdict with a narrowed claim, the narrowed verify task
 		step: 3,
 		windows: 1,
 		focus: (t) => {
-			const target = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "big", evidence: "e", sources: ["p"], status: "unverified" });
-			const r = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "C2 fails", evidence: "e", sources: ["p"], status: "unverified" });
-			for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: r.id, check: c, verdict: "pass", rationale: "", sources: [], by: "v" });
+			const target = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "big is the claim under test", status: "unverified" });
+			const r = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "C2 fails is the claim under test", status: "unverified" });
+			for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: r.id, check: c, verdict: "pass", rationale: why(""), sources: [], by: "v" });
 			refuter = r.id;
 			return resolveFocus(t, target.id);
 		},
@@ -402,7 +403,7 @@ test("focus: after focus_verdict with a narrowed claim, the narrowed verify task
 			if (e !== 1) return;
 			writeFileSync(h.focus!.state, `## Claim tree\nC2 refuted (${refuter})\n## Verdict\nholds with limits`);
 			const tool = spec.tools.find((t) => t.name === "focus_verdict")!;
-			const p = { outcome: "holds_with_limits", summary: "s", narrowedClaim: "small", sources: ["p"], refutedBy: [refuter] };
+			const p = { outcome: "holds_with_limits", summary: why("s"), narrowedTitle: "Narrowed test claim", narrowedClaim: "small is the claim under test", sources: [PAPER], refutedBy: [refuter] };
 			await tool.execute("id", p as never, undefined, undefined, {} as never);
 		},
 		tasksPerEpoch: (e) => (e === 0 ? 2 : 0),
@@ -548,7 +549,7 @@ test("findings recorded after the wrap summary are in the next window's summary 
 			if (spec.name === "summary") summaries++;
 			else if (summaries === 1 && !late && spec.name.startsWith("sub-") && !h.calls.includes("SLEEP")) {
 				await tick();
-				late = appendFinding(h.topic.ledger, { author: spec.name, kind: "insight", claim: "late", evidence: "e", sources: ["p"], status: "unverified" });
+				late = appendFinding(h.topic.ledger, { ...VALID, author: spec.name, kind: "insight", claim: "late is the claim under test", status: "unverified" });
 				await tick();
 			}
 			return run();

@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { assertFinding, assertVerification, type Experiment } from "./schema.ts";
 
 export type FindingStatus = "unverified" | "verified" | "refuted";
 
@@ -14,12 +15,12 @@ export interface Finding {
 	taskId?: string;
 	/** Missing on entries written before kinds existed. */
 	kind?: FindingKind;
-	/** Short headline; missing on entries written before the v2 schema. */
-	title?: string;
+	/** Short headline, required on write. Lines from before the v2 schema lack it until migrated, so views fall back to the claim. */
+	title: string;
 	claim: string;
 	evidence: string;
 	/** Setup and results of a computation the finding rests on (Markdown). */
-	experiment?: { setup: string; results: string };
+	experiment?: Experiment;
 	/** Semantic Scholar paperIds (or other stable ids) backing the claim. */
 	sources: string[];
 	/** As written; the effective status comes from verifications (see loadFindings). */
@@ -44,6 +45,8 @@ export interface Verification {
 	/** Papers checked (novelty/citation) or supporting a refutation. */
 	sources: string[];
 	by: string;
+	/** Set only by focus_verdict: the focus run's outcome on its target. */
+	focus?: { key: string; outcome: "holds" | "holds_with_limits" | "fails"; narrowedFindingId?: string };
 }
 
 /** Only insights (and legacy unkinded entries) can rest on a computation, so only they get a reproduce check. */
@@ -91,6 +94,8 @@ function tryParse<T>(s: string): T | undefined {
 
 export function appendFinding(ledgerPath: string, f: Omit<Finding, "id" | "ts">): Finding {
 	const full: Finding = { id: `f-${shortId()}`, ts: new Date().toISOString(), ...f };
+	// Every writer (tools, focus_verdict, scripts) is held to the exported schema.
+	assertFinding(full);
 	// One line per write; appends under PIPE_BUF are atomic on POSIX.
 	appendFileSync(ledgerPath, JSON.stringify(full) + "\n");
 	return full;
@@ -115,6 +120,7 @@ export interface FindingQuery {
 
 export function appendVerification(path: string, v: Omit<Verification, "id" | "ts">): Verification {
 	const full: Verification = { id: `v-${shortId()}`, ts: new Date().toISOString(), ...v };
+	assertVerification(full);
 	appendFileSync(path, JSON.stringify(full) + "\n");
 	return full;
 }

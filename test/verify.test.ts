@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { PAPER, PAPERS, VALID, why } from "./records.ts";
+import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,7 +22,7 @@ import { ensureTopic } from "../src/topic.ts";
 import { BASE_CHECKS, focusVerdictTool, ledgerTools, makePythonTool, trackFetches, verifyTool } from "../src/tools.ts";
 import { resolveFocus, scopeProblems } from "../src/focus.ts";
 
-const F: Finding = { id: "f1", ts: "t0", author: "a", claim: "c", evidence: "e", sources: ["p"], status: "unverified", kind: "insight" };
+const F: Finding = { id: "f1", ts: "t0", author: "a", title: "t", claim: "c", evidence: "e", sources: ["p"], status: "unverified", kind: "insight" };
 const v = (check: Verification["check"], verdict: Verification["verdict"], ts: string): Verification => ({
 	id: `v-${ts}`, ts, findingId: "f1", check, verdict, rationale: "", sources: [], by: "ver",
 });
@@ -45,10 +46,12 @@ test("latest verdict per check wins regardless of file order", () => {
 
 test("verify tasks: one per gap/insight (incl. legacy unkinded), never for literature, never twice", () => {
 	const t = ensureTopic("vq", mkdtempSync(join(tmpdir(), "ar-")));
-	const base = { author: "a", evidence: "e", sources: ["p"], status: "unverified" as const };
-	appendFinding(t.ledger, { ...base, kind: "literature", claim: "lit" });
-	const gap = appendFinding(t.ledger, { ...base, kind: "gap", claim: "gap" });
-	const legacy = appendFinding(t.ledger, { ...base, claim: "old" });
+	const base = { ...VALID, author: "a", status: "unverified" as const };
+	appendFinding(t.ledger, { ...base, kind: "literature", claim: "lit is the claim under test" });
+	const gap = appendFinding(t.ledger, { ...base, kind: "gap", claim: "gap is the claim under test" });
+	// Unkinded lines predate kinds and the schema, so they are only ever read.
+	appendFileSync(t.ledger, JSON.stringify({ id: "f-0000aaaa", ts: new Date().toISOString(), author: "a", claim: "old", evidence: "e", sources: ["p"], status: "unverified" }) + "\n");
+	const legacy = { id: "f-0000aaaa" };
 	assert.equal(enqueueVerifyTasks(t), 2);
 	assert.equal(enqueueVerifyTasks(t), 0, "idempotent");
 	const ids = listTasks(t.tasks).map((x) => x.findingId).sort();
@@ -66,18 +69,18 @@ test("claim order: verify tasks before older research; allow filter restricts", 
 
 test("verify_record: bound to one finding; novelty pass needs enough papers", async () => {
 	const t = ensureTopic("vr", mkdtempSync(join(tmpdir(), "ar-")));
-	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 	let searches = 0;
 	const tool = verifyTool(t, f.id, "ver-1", () => searches);
 	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
 	// Any novelty verdict, even inconclusive, is refused until the verifier has searched.
-	await assert.rejects(() => call({ check: "novelty", verdict: "inconclusive", rationale: "r", sources: [] }), /at least 3 paper_search calls/);
-	await call({ check: "citation", verdict: "inconclusive", rationale: "other checks unaffected", sources: [] });
+	await assert.rejects(() => call({ check: "novelty", verdict: "inconclusive", rationale: why("r"), sources: [] }), /at least 3 paper_search calls/);
+	await call({ check: "citation", verdict: "inconclusive", rationale: why("other checks unaffected"), sources: [] });
 	searches = 3;
-	await assert.rejects(() => call({ check: "novelty", verdict: "pass", rationale: "r", sources: ["a", "b", "a"] }), /at least 5/);
-	await call({ check: "novelty", verdict: "pass", rationale: "q1 q2 q3", sources: ["a", "b", "c", "d", "e"] });
-	await call({ check: "citation", verdict: "pass", rationale: "ok", sources: ["p"] });
-	await call({ check: "adversarial", verdict: "pass", rationale: "survived", sources: [] });
+	await assert.rejects(() => call({ check: "novelty", verdict: "pass", rationale: why("r"), sources: [PAPERS[0], PAPERS[1], PAPERS[0]] }), /at least 5/);
+	await call({ check: "novelty", verdict: "pass", rationale: why("q1 q2 q3"), sources: PAPERS });
+	await call({ check: "citation", verdict: "pass", rationale: why("ok"), sources: [PAPER] });
+	await call({ check: "adversarial", verdict: "pass", rationale: why("survived"), sources: [] });
 	const got = loadFindings(t).find((x) => x.id === f.id);
 	assert.deepEqual([got?.status, got?.novelty], ["verified", "novel"]);
 });
@@ -100,10 +103,10 @@ test("focus: same target reuses its key and state; verify tasks scoped to the fo
 	assert.notEqual(resolveFocus(t, "hypothesis B").key, a.key);
 	assert.equal(a.findingId, undefined);
 	assert.equal(resolveFocus(t, "f-0123abcd").findingId, "f-0123abcd");
-	const base = { author: "a", kind: "insight" as const, evidence: "e", sources: ["p"], status: "unverified" as const };
+	const base = { ...VALID, author: "a", kind: "insight" as const, status: "unverified" as const };
 	const ft = createTask(t.tasks, "C1 replicate", "d", { focus: a.key });
-	const mine = appendFinding(t.ledger, { ...base, claim: "mine", taskId: ft.id });
-	appendFinding(t.ledger, { ...base, claim: "breadth" });
+	const mine = appendFinding(t.ledger, { ...base, claim: "mine is the claim under test", taskId: ft.id });
+	appendFinding(t.ledger, { ...base, claim: "breadth is the claim under test" });
 	assert.equal(enqueueVerifyTasks(t, a.key), 1);
 	const vt = listTasks(t.tasks).find((x) => x.type === "verify");
 	assert.deepEqual([vt?.findingId, vt?.focus], [mine.id, a.key]);
@@ -112,96 +115,96 @@ test("focus: same target reuses its key and state; verify tasks scoped to the fo
 
 test("verify_record: a reproduce pass or fail needs the verifier's own python_run attempt", async () => {
 	const t = ensureTopic("vrp", mkdtempSync(join(tmpdir(), "ar-")));
-	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 	let runs = 0;
 	const tool = verifyTool(t, f.id, "ver-1", () => 0, ["citation", "adversarial", "novelty", "reproduce"], () => runs);
 	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
-	await assert.rejects(() => call({ check: "reproduce", verdict: "pass", rationale: "relied on f-x", sources: [] }), /own python_run/);
-	await assert.rejects(() => call({ check: "reproduce", verdict: "inconclusive", rationale: "did not try", sources: [] }), /own python_run/);
+	await assert.rejects(() => call({ check: "reproduce", verdict: "pass", rationale: why("relied on f-x"), sources: [] }), /own python_run/);
+	await assert.rejects(() => call({ check: "reproduce", verdict: "inconclusive", rationale: why("did not try"), sources: [] }), /own python_run/);
 	runs = 1;
-	await call({ check: "reproduce", verdict: "inconclusive", rationale: "tried; setup missing n", sources: [] });
-	await call({ check: "reproduce", verdict: "pass", rationale: "reran", sources: [] });
+	await call({ check: "reproduce", verdict: "inconclusive", rationale: why("tried; setup missing n"), sources: [] });
+	await call({ check: "reproduce", verdict: "pass", rationale: why("reran"), sources: [] });
 });
 
 test("focus_verdict: refutes the target, records the narrowed claim with a verify task, once per focus", async () => {
 	const t = ensureTopic("fv", mkdtempSync(join(tmpdir(), "ar-")));
-	const base = { author: "a", kind: "insight" as const, evidence: "e", sources: ["p"], status: "unverified" as const };
-	const target = appendFinding(t.ledger, { ...base, claim: "big claim" });
+	const base = { ...VALID, author: "a", kind: "insight" as const, status: "unverified" as const };
+	const target = appendFinding(t.ledger, { ...base, claim: "big claim is the claim under test" });
 	const focus = resolveFocus(t, target.id);
 	writeFileSync(focus.state, "## Claim tree\nC1 reproduced\n## Verdict\nholds with limits");
 	const tool = focusVerdictTool(t, focus);
 	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
-	await assert.rejects(() => call({ outcome: "holds", summary: "s", sources: ["p"] }), /No research task has finished/);
+	await assert.rejects(() => call({ outcome: "holds", summary: why("s"), sources: [PAPER] }), /No research task has finished/);
 	updateTask(t.tasks, { ...createTask(t.tasks, "C1 test", "d", { focus: focus.key }), status: "done" });
-	await assert.rejects(() => call({ outcome: "holds_with_limits", summary: "s", sources: ["f-x"] }), /narrowedClaim/);
-	await assert.rejects(() => call({ outcome: "holds_with_limits", summary: "s", narrowedClaim: "n", sources: ["p"] }), /needs refutedBy/);
-	const pending = appendFinding(t.ledger, { ...base, claim: "unsettled" });
+	await assert.rejects(() => call({ outcome: "holds_with_limits", summary: why("s"), sources: [PAPER] }), /narrowedClaim/);
+	await assert.rejects(() => call({ outcome: "holds_with_limits", summary: why("s"), narrowedTitle: "Narrowed test claim", narrowedClaim: "n is the claim under test", sources: [PAPER] }), /needs refutedBy/);
+	const pending = appendFinding(t.ledger, { ...base, claim: "unsettled is the claim under test" });
 	await assert.rejects(
-		() => call({ outcome: "fails", summary: "s", sources: ["p"], refutedBy: [pending.id, target.id] }),
+		() => call({ outcome: "fails", summary: why("s"), sources: [PAPER], refutedBy: [pending.id, target.id] }),
 		new RegExp(`not settled or unknown: ${pending.id}\\.`),
 	);
-	const refuter = appendFinding(t.ledger, { ...base, kind: "gap", claim: "C3 refuted" });
-	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: "", sources: [], by: "v" });
-	await call({ outcome: "holds_with_limits", summary: "C3 refuted", narrowedClaim: "small claim", sources: ["f-x"], refutedBy: [refuter.id] });
-	await assert.rejects(() => call({ outcome: "holds", summary: "s", sources: ["p"] }), /already recorded/);
+	const refuter = appendFinding(t.ledger, { ...base, kind: "gap", claim: "C3 refuted is the claim under test" });
+	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: why(""), sources: [], by: "v" });
+	await call({ outcome: "holds_with_limits", summary: why("C3 refuted"), narrowedTitle: "Narrowed test claim", narrowedClaim: "small claim is the claim under test", sources: [PAPER], refutedBy: [refuter.id] });
+	await assert.rejects(() => call({ outcome: "holds", summary: why("s"), sources: [PAPER] }), /already recorded/);
 	const fs = loadFindings(t);
 	assert.equal(fs.find((f) => f.id === target.id)?.status, "refuted");
-	const narrowed = fs.find((f) => f.claim === "small claim")!;
+	const narrowed = fs.find((f) => f.claim === "small claim is the claim under test")!;
 	assert.equal(narrowed.author, `focus-${focus.key}`);
 	const vt = listTasks(t.tasks).find((x) => x.findingId === narrowed.id);
 	assert.deepEqual([vt?.type, vt?.focus], ["verify", focus.key]);
 	assert.equal(readVerifications(t.verifications).filter((v) => v.by === `focus-${focus.key}`).length, 1);
 	// The recorded verdict is read from the ledger, so a fresh tool (a later run) refuses too.
-	await assert.rejects(() => focusVerdictTool(t, focus).execute("id", { outcome: "holds", summary: "s", sources: ["p"] } as never, undefined, undefined, {} as never), /already recorded/);
+	await assert.rejects(() => focusVerdictTool(t, focus).execute("id", { outcome: "holds", summary: why("s"), sources: [PAPER] } as never, undefined, undefined, {} as never), /already recorded/);
 	// A free-text hypothesis becomes a finding so the verdict has somewhere to go.
 	assert.equal(narrowed.kind, "insight", "inherits the target's kind");
-	const ft = resolveFocus(t, "free text");
+	const ft = resolveFocus(t, "free-text hypothesis A");
 	writeFileSync(ft.state, "## Verdict\nfails");
 	updateTask(t.tasks, { ...createTask(t.tasks, "x", "d", { focus: ft.key }), status: "done" });
-	await focusVerdictTool(t, ft).execute("id", { outcome: "fails", summary: "no", sources: ["p"], refutedBy: [refuter.id] } as never, undefined, undefined, {} as never);
-	assert.equal(loadFindings(t).find((f) => f.claim === "free text")?.status, "refuted");
+	await focusVerdictTool(t, ft).execute("id", { targetTitle: "Free-text hypothesis", outcome: "fails", summary: why("no"), sources: [PAPER], refutedBy: [refuter.id] } as never, undefined, undefined, {} as never);
+	assert.equal(loadFindings(t).find((f) => f.claim === "free-text hypothesis A")?.status, "refuted");
 });
 
 test("focus_verdict: a refuted free-text target is not queued for breadth verification; a holding one is", async () => {
 	const t = ensureTopic("fvb", mkdtempSync(join(tmpdir(), "ar-")));
-	const refuter = appendFinding(t.ledger, { author: "a", kind: "gap", claim: "r", evidence: "e", sources: ["p"], status: "unverified" });
-	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: "", sources: [], by: "v" });
+	const refuter = appendFinding(t.ledger, { ...VALID, author: "a", kind: "gap", claim: "r is the claim under test", status: "unverified" });
+	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: why(""), sources: [], by: "v" });
 	updateTask(t.tasks, { ...createTask(t.tasks, "Verify r", "d", { type: "verify", findingId: refuter.id }), status: "done" });
-	const focus = resolveFocus(t, "free text");
+	const focus = resolveFocus(t, "free-text hypothesis A");
 	writeFileSync(focus.state, "## Verdict\nfails");
 	updateTask(t.tasks, { ...createTask(t.tasks, "x", "d", { focus: focus.key }), status: "done" });
-	await focusVerdictTool(t, focus, () => {}).execute("id", { outcome: "fails", summary: "no", sources: ["p"], refutedBy: [refuter.id] } as never, undefined, undefined, {} as never);
+	await focusVerdictTool(t, focus).execute("id", { targetTitle: "Free-text hypothesis", outcome: "fails", summary: why("no"), sources: [PAPER], refutedBy: [refuter.id] } as never, undefined, undefined, {} as never);
 	assert.equal(enqueueVerifyTasks(t), 0);
-	const target = loadFindings(t).find((f) => f.claim === "free text");
+	const target = loadFindings(t).find((f) => f.claim === "free-text hypothesis A");
 	assert.deepEqual([target?.role, target?.status], ["focus-target", "refuted"]);
 	// A holds verdict is only an adversarial pass, so breadth still runs the remaining checks.
-	const held = resolveFocus(t, "held text");
+	const held = resolveFocus(t, "held-text hypothesis B");
 	writeFileSync(held.state, "## Verdict\nholds");
 	updateTask(t.tasks, { ...createTask(t.tasks, "y", "d", { focus: held.key }), status: "done" });
-	await focusVerdictTool(t, held, () => {}).execute("id", { outcome: "holds", summary: "yes", sources: ["p"] } as never, undefined, undefined, {} as never);
+	await focusVerdictTool(t, held).execute("id", { targetTitle: "Free-text hypothesis", outcome: "holds", summary: why("yes"), sources: [PAPER] } as never, undefined, undefined, {} as never);
 	assert.equal(enqueueVerifyTasks(t), 1);
-	const ht = loadFindings(t).find((f) => f.claim === "held text");
+	const ht = loadFindings(t).find((f) => f.claim === "held-text hypothesis B");
 	assert.deepEqual([ht?.role, ht?.status], ["focus-target", "unverified"]);
 	assert.equal(listTasks(t.tasks).find((x) => x.findingId === ht?.id)?.type, "verify");
 });
 
 test("focus_verdict: a narrowed gap stays a gap", async () => {
 	const t = ensureTopic("fg", mkdtempSync(join(tmpdir(), "ar-")));
-	const base = { author: "a", evidence: "e", sources: ["p"], status: "unverified" as const };
+	const base = { ...VALID, author: "a", status: "unverified" as const };
 	const gap = appendFinding(t.ledger, { ...base, kind: "gap", claim: "no paper does X or Y" });
-	const refuter = appendFinding(t.ledger, { ...base, kind: "literature", claim: "paper P does X" });
-	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: "", sources: [], by: "v" });
+	const refuter = appendFinding(t.ledger, { ...base, kind: "literature", claim: "paper P does X is the claim under test" });
+	for (const c of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: refuter.id, check: c, verdict: "pass", rationale: why(""), sources: [], by: "v" });
 	const focus = resolveFocus(t, gap.id);
 	writeFileSync(focus.state, "## Verdict\nholds with limits");
 	updateTask(t.tasks, { ...createTask(t.tasks, "prior work", "d", { focus: focus.key }), status: "done" });
 	await focusVerdictTool(t, focus).execute(
 		"id",
-		{ outcome: "holds_with_limits", summary: "X is done by P", narrowedClaim: "no paper does Y", sources: ["p"], refutedBy: [refuter.id] } as never,
+		{ outcome: "holds_with_limits", summary: why("X is done by P"), narrowedTitle: "Narrowed test claim", narrowedClaim: "no paper does Y is the claim under test", sources: [PAPER], refutedBy: [refuter.id] } as never,
 		undefined,
 		undefined,
 		{} as never,
 	);
-	assert.equal(loadFindings(t).find((f) => f.claim === "no paper does Y")?.kind, "gap");
+	assert.equal(loadFindings(t).find((f) => f.claim === "no paper does Y is the claim under test")?.kind, "gap");
 });
 
 test("scope: untested items need an allowed reason tag", () => {
@@ -222,10 +225,10 @@ holds
 
 test("focus_verdict: refuses without a saved verdict, or with untagged untested items", async () => {
 	const t = ensureTopic("fs", mkdtempSync(join(tmpdir(), "ar-")));
-	const focus = resolveFocus(t, "free text");
+	const focus = resolveFocus(t, "free-text hypothesis A");
 	updateTask(t.tasks, { ...createTask(t.tasks, "x", "d", { focus: focus.key }), status: "done" });
 	const call = () =>
-		focusVerdictTool(t, focus).execute("id", { outcome: "holds", summary: "s", sources: ["p"] } as never, undefined, undefined, {} as never);
+		focusVerdictTool(t, focus).execute("id", { targetTitle: "Free-text hypothesis", outcome: "holds", summary: why("s"), sources: [PAPER] } as never, undefined, undefined, {} as never);
 	await assert.rejects(call, /before calling focus_verdict/);
 	writeFileSync(focus.state, "## Claim tree\n- C1 out of scope (future work)\n## Verdict\nholds");
 	await assert.rejects(call, /left untested without an allowed reason[\s\S]*C1 out of scope \(future work\)/);
@@ -275,40 +278,40 @@ test("python_run: concurrent calls reserve budget before awaiting", async () => 
 
 test("focus_verdict: refuses while a cited finding is unverified but checkable, and queues its re-verification", async () => {
 	const t = ensureTopic("fu", mkdtempSync(join(tmpdir(), "ar-")));
-	const focus = resolveFocus(t, "free text");
+	const focus = resolveFocus(t, "free-text hypothesis A");
 	updateTask(t.tasks, { ...createTask(t.tasks, "x", "d", { focus: focus.key }), status: "done" });
-	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 	writeFileSync(focus.state, `## Claim tree\n- C1 holds (${f.id})\n## Verdict\nholds`);
 	const call = () =>
-		focusVerdictTool(t, focus).execute("id", { outcome: "holds", summary: "s", sources: ["p"] } as never, undefined, undefined, {} as never);
+		focusVerdictTool(t, focus).execute("id", { targetTitle: "Free-text hypothesis", outcome: "holds", summary: why("s"), sources: [PAPER] } as never, undefined, undefined, {} as never);
 	await assert.rejects(call, new RegExp(`cites unverified findings: ${f.id} \\(re-verification queued`));
 	assert.ok(listTasks(t.tasks).some((x) => x.type === "verify" && x.findingId === f.id && x.focus === focus.key));
-	for (const check of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: f.id, check, verdict: "pass", rationale: "r", sources: [], by: "ver" });
+	for (const check of ["citation", "adversarial"] as const) appendVerification(t.verifications, { findingId: f.id, check, verdict: "pass", rationale: why("r"), sources: [], by: "ver" });
 	await call();
 });
 
 test("verify_record: a citation verdict needs one of the finding's sources fetched", async () => {
 	const t = ensureTopic("vcf", mkdtempSync(join(tmpdir(), "ar-")));
-	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["f-0123abcd", "paperX"], status: "unverified" });
+	const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", sources: ["f-0123abcd", PAPER], status: "unverified" });
 	const fetched = new Set<string>();
 	const get = trackFetches(ledgerTools(t, "ver-1").get, fetched);
 	const tool = verifyTool(t, f.id, "ver-1", () => 0, BASE_CHECKS, () => 0, () => fetched);
 	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
-	await assert.rejects(() => call({ check: "citation", verdict: "inconclusive", rationale: "did not fetch", sources: [] }), /open the cited sources/);
+	await assert.rejects(() => call({ check: "citation", verdict: "inconclusive", rationale: why("did not fetch"), sources: [] }), /open the cited sources/);
 	await get.execute("id", { ids: ["f-0123abcd"] } as never, undefined, undefined, {} as never);
-	await call({ check: "citation", verdict: "pass", rationale: "checked", sources: [] });
+	await call({ check: "citation", verdict: "pass", rationale: why("checked"), sources: [] });
 });
 
 test("verify_record: an adversarial verdict on a computational finding needs the verifier's own python_run", async () => {
 	const t = ensureTopic("vadv", mkdtempSync(join(tmpdir(), "ar-")));
-	const f = appendFinding(t.ledger, { author: "a", kind: "insight", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	const f = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 	let runs = 0;
 	const tool = verifyTool(t, f.id, "ver-1", () => 0, BASE_CHECKS, () => runs, undefined, true);
 	const call = (p: object) => tool.execute("id", p as never, undefined, undefined, {} as never);
-	await assert.rejects(() => call({ check: "adversarial", verdict: "inconclusive", rationale: "ran nothing", sources: [] }), /own python_run refutation/);
+	await assert.rejects(() => call({ check: "adversarial", verdict: "inconclusive", rationale: why("ran nothing"), sources: [] }), /own python_run refutation/);
 	runs = 1;
-	await call({ check: "adversarial", verdict: "pass", rationale: "stress case held", sources: [] });
+	await call({ check: "adversarial", verdict: "pass", rationale: why("stress case held"), sources: [] });
 	// Without the flag (gap/literature findings, or no sandbox) a search-only verdict is allowed.
 	const off = verifyTool(t, f.id, "ver-2", () => 0, BASE_CHECKS, () => 0);
-	await off.execute("id", { check: "adversarial", verdict: "pass", rationale: "r", sources: [] } as never, undefined, undefined, {} as never);
+	await off.execute("id", { check: "adversarial", verdict: "pass", rationale: why("r"), sources: [] } as never, undefined, undefined, {} as never);
 });

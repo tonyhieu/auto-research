@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { VALID } from "./records.ts";
 import { mkdtempSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +44,7 @@ test("parseUsage falls back to five_hour and rejects empty payloads", () => {
 test("topic layout, ledger, and tasks round-trip; malformed lines are skipped", () => {
 	assert.equal(slugify("Generative Models: Diffusion!"), "generative-models-diffusion");
 	const t = ensureTopic("Test Topic", mkdtempSync(join(tmpdir(), "ar-")));
-	appendFinding(t.ledger, { author: "a", claim: "c", evidence: "e", sources: ["p1"], status: "unverified" });
+	appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 	appendFileSync(t.ledger, '{"truncated": \n');
 	assert.equal(readFindings(t.ledger).length, 1);
 	createTask(t.tasks, "x", "y");
