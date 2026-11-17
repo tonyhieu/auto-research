@@ -1,11 +1,16 @@
-"""Read-only JSON API over topics/<slug>/ ledgers."""
+"""Read-only JSON API over topics/<slug>/ ledgers, plus the static app in ui/static/."""
+
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 
 from arui import runs
 from arui.derive import checks, latest_focus, orchestrator_heading, superseded
 from arui.render import rendered
 from arui.store import Store, Topic, list_docs, read_doc
+
+STATIC = Path(__file__).resolve().parents[1] / "static"
 
 
 def topic_summary(t: Topic) -> dict:
@@ -122,4 +127,6 @@ def create_app(store: Store) -> FastAPI:
         t = topic(slug)
         return runs.fold(runs.read_events(t.dir), runs.lock_pid(t.dir))
 
+    # Mounted last so /api routes take precedence; html=True serves index.html at /.
+    app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
     return app

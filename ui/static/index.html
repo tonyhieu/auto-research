@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>auto-research</title>
+<link rel="stylesheet" href="/app.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <h4>Topics</h4>
+    <nav id="topics"></nav>
+    <div id="docs"></div>
+    <div id="hidden" class="hid"></div>
+  </aside>
+  <main>
+    <div class="top"><input id="search" type="search" placeholder="Search titles, claims, ids, kinds..."><span id="count" class="count"></span></div>
+    <div id="warn"></div>
+    <div id="cur"></div>
+    <div class="list"><div class="lh"><span>Unrefuted and novel</span></div><div id="rows"></div></div>
+  </main>
+  <section class="focus">
+    <nav class="tabs"><a id="tab-run" href="#">Run</a><a id="tab-inspector" href="#">Inspector</a></nav>
+    <div id="pane" class="pane"></div>
+  </section>
+</div>
+</body>
+</html>
