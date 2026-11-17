@@ -88,8 +88,15 @@ def serve(port: int) -> int:
     from arui.server import create_app
     from arui.store import Store
 
+    app = create_app(Store(TOPICS))
+
+    class Server(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            app.state.events.close()  # SSE streams never finish on their own; shutdown waits on them
+            super().handle_exit(sig, frame)
+
     # Localhost only: there is no auth.
-    uvicorn.run(create_app(Store(TOPICS)), host="127.0.0.1", port=port)
+    Server(uvicorn.Config(app, host="127.0.0.1", port=port, timeout_graceful_shutdown=5)).run()
     return 0
 
 

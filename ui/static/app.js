@@ -1,5 +1,6 @@
 // Read-only ledger browser. Routes: #/<slug>, #/<slug>/<finding id>, #/<slug>/docs/<group>/<name>.
 // Markdown arrives pre-rendered from the server as {md, html}; everything else is escaped here.
+// Live updates: /api/events (SSE) triggers refetches; the server pushes no data itself.
 
 const $ = (id) => document.getElementById(id);
 const BUCKETS = [["refuted", "Refuted"], ["known", "Not novel"], ["pending", "Novelty pending"]];
@@ -17,7 +18,11 @@ const state = {
   detail: null, // fetched body for `view`
   open: new Set(), // sidebar <details> keys left open by the user
   seq: 0, // guards against out-of-order detail responses
+  topicListSeq: 0, // same, for refetches of /api/topics
+  openTopicSeq: 0, // same, for refetches of the open topic
 };
+const ALL_PARTS = ["ledger", "verifications", "tasks", "docs"]; // topic-changed parts (arui/events.py)
+const RUN_VERB = { complete: "finished", signal: "stopped", error: "failed", lost: "lost" };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const day = (ts) => (ts ? ts.slice(0, 10) : "");
@@ -72,23 +77,76 @@ async function route() {
   await loadDetail();
 }
 
+async function fetchDetail(v) {
+  const base = `/api/topics/${encodeURIComponent(state.slug)}`;
+  try {
+    return v.type === "finding" ? await api(`${base}/findings/${encodeURIComponent(v.id)}`) : await api(`${base}/docs/${encodeURIComponent(v.group)}/${encodeURIComponent(v.name)}`);
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 async function loadDetail() {
   const seq = ++state.seq;
   state.detail = null;
   renderAll();
   const v = state.view;
   if (!v) return;
-  const base = `/api/topics/${encodeURIComponent(state.slug)}`;
-  let detail;
-  try {
-    detail = v.type === "finding" ? await api(`${base}/findings/${encodeURIComponent(v.id)}`) : await api(`${base}/docs/${encodeURIComponent(v.group)}/${encodeURIComponent(v.name)}`);
-  } catch (e) {
-    detail = { error: e.message };
-  }
+  const detail = await fetchDetail(v);
   if (seq !== state.seq) return;
   state.detail = detail;
   renderPane();
   renderRows(); // the viewing accent bar follows the open finding
+}
+
+// Refetch the open view in place: the old body stays up meanwhile and the pane keeps its scroll.
+async function reloadDetail() {
+  const seq = ++state.seq;
+  const v = state.view;
+  if (!v) return;
+  const detail = await fetchDetail(v);
+  if (seq !== state.seq || v !== state.view) return;
+  state.detail = detail;
+  renderPane(true);
+}
+
+async function refreshTopics() {
+  const seq = ++state.topicListSeq;
+  let topics;
+  try {
+    topics = await api("/api/topics");
+  } catch {
+    return; // keep the last list; the next event retries
+  }
+  if (seq !== state.topicListSeq) return;
+  state.topics = topics;
+  if (!state.slug) return route(); // e.g. the first topic just appeared
+  renderSidebar();
+  renderStrip();
+}
+
+// Refetch the open topic, keeping selection, scroll, tab, and search; `force` always reloads the Inspector.
+async function refreshTopic(parts, force = false) {
+  const slug = state.slug;
+  if (!slug || !state.topic) return; // route() is loading it
+  const seq = ++state.openTopicSeq;
+  const base = `/api/topics/${encodeURIComponent(slug)}`;
+  let topic, docs;
+  try {
+    [topic, docs] = await Promise.all([api(base), parts.includes("docs") ? api(`${base}/docs`) : state.docs]);
+  } catch {
+    return;
+  }
+  if (seq !== state.openTopicSeq || slug !== state.slug || !state.topic) return;
+  const v = state.view;
+  const checks = (t) => JSON.stringify(t.findings.find((f) => f.id === v.id)?.checks);
+  // Docs are rewritten in place, so any docs change reloads an open doc.
+  const changed = v?.type === "finding" ? checks(state.topic) !== checks(topic) : v?.type === "doc" && parts.includes("docs");
+  state.topic = topic;
+  state.docs = docs;
+  renderSidebar();
+  renderMain();
+  if (v && (force || changed)) await reloadDetail();
 }
 
 function matches(f) {
@@ -160,6 +218,31 @@ function renderRows() {
       .join("") || `<div class="none">${t.findings.length ? "No matching findings" : "No findings yet"}</div>`;
 }
 
+function runText(run) {
+  if (run.state === "running") {
+    const s = run.start;
+    return `<span class="dot"></span><b>Running</b>${s ? ` &middot; ${esc(s.mode)} run${s.focusKey ? ` &middot; ${esc(s.focusKey)}` : ""} &middot; since ${minute(s.ts)}` : ` &middot; pid ${run.pid}`}`;
+  }
+  const l = run.last;
+  return `<b>Idle</b>${l ? ` &middot; last ${esc(l.mode)} run${l.focusKey ? ` ${esc(l.focusKey)}` : ""} ${esc(RUN_VERB[l.reason] ?? l.reason)} ${minute(l.end ?? l.start)}` : " &middot; no runs yet"}`;
+}
+
+function renderStrip() {
+  const run = state.topics.find((t) => t.slug === state.slug)?.run ?? state.topic?.run;
+  $("strip").innerHTML = run ? `<div class="strip ${run.state}">${runText(run)}</div>` : "";
+}
+
+function toast(d) {
+  const title = state.topics.find((t) => t.slug === d.slug)?.title ?? d.slug;
+  const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
+  const el = document.createElement("div");
+  el.className = `toast ${d.reason}`;
+  el.innerHTML = `<b>${esc(title)}</b>${esc(d.mode)} run ${esc(RUN_VERB[d.reason] ?? d.reason)}: ${n(d.newFindings, "new finding")}, ${n(d.newVerifications, "verdict")}`;
+  el.onclick = () => el.remove();
+  $("toasts").append(el);
+  setTimeout(() => el.remove(), 10000);
+}
+
 function renderMain(error) {
   const t = state.topic;
   $("warn").innerHTML = error
@@ -228,7 +311,7 @@ function docHtml(d) {
   return `<header class="dh"><span class="did">${esc(d.name)}</span><div class="dm">${esc(d.group)}${meta ? ` &middot; updated ${minute(new Date(meta.mtime * 1000).toISOString())}` : ""}</div></header><div class="md" style="margin-top:14px">${d.html}</div>`;
 }
 
-function renderPane() {
+function renderPane(keepScroll = false) {
   $("tab-run").className = state.tab === "run" ? "on" : "";
   $("tab-inspector").className = state.tab === "inspector" ? "on" : "";
   let body;
@@ -238,11 +321,12 @@ function renderPane() {
   else if (state.detail.error) body = `<div class="warn">${esc(state.detail.error)}</div>`;
   else body = `<article class="dv"><div class="dvi">${state.view.type === "finding" ? findingHtml(state.detail) : docHtml(state.detail)}</div></article>`;
   $("pane").innerHTML = body;
-  $("pane").parentElement.scrollTop = 0;
+  if (!keepScroll) $("pane").parentElement.scrollTop = 0;
 }
 
 function renderAll(error) {
   renderSidebar();
+  renderStrip();
   renderMain(error);
   renderPane();
 }
@@ -280,6 +364,25 @@ $("search").addEventListener("input", (e) => {
 });
 
 window.addEventListener("hashchange", route);
+
+// EventSource reconnects on its own; refetch on reconnect so missed events do not matter.
+const es = new EventSource("/api/events");
+let connected = false;
+es.onopen = () => {
+  if (connected) {
+    refreshTopics();
+    refreshTopic(ALL_PARTS, true);
+  }
+  connected = true;
+};
+for (const name of ["topic-changed", "run-started", "run-finished"]) {
+  es.addEventListener(name, (e) => {
+    const d = JSON.parse(e.data);
+    refreshTopics();
+    if (name === "topic-changed" && d.slug === state.slug) refreshTopic(d.parts);
+    if (name === "run-finished") toast(d);
+  });
+}
 
 try {
   state.topics = await api("/api/topics");
