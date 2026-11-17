@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { PAPER, VALID } from "./records.ts";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +28,7 @@ test("ensureTopic writes topic.json once with the real title", () => {
 
 test("run events: start and end share a run id; reason comes from the exit code", () => {
 	const t = ensureTopic("runs", mkdtempSync(join(tmpdir(), "ar-")));
-	appendFinding(t.ledger, { author: "a", claim: "c", evidence: "e", sources: ["p"], status: "unverified" });
+	appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", claim: "c is the claim under test", status: "unverified" });
 	const start = { pid: 1, mode: "focus" as const, focusKey: "fx-12345678", target: "f-12345678", windows: 1, concurrency: 3, log: "logs/run.log", origin: "ui" as const };
 	const ids = [0, 130, 1].map((code) => {
 		const id = recordRunStart(t, start);
@@ -98,7 +99,8 @@ test("memory insight entry uses the title and includes the experiment", () => {
 	const e = insightEntry(t, { ...f, experiment: { setup: "SETUP TEXT", results: "| a | b |" } }, []);
 	assert.equal(e.title, "Insight (Mem Topic): Short headline");
 	assert.match(e.content, /## Experiment\n### Setup\nSETUP TEXT\n\n### Results\n\| a \| b \|/);
-	const legacy = insightEntry(t, { ...f, title: undefined }, []);
+	// A line written before the v2 schema has no title.
+	const legacy = insightEntry(t, { ...f, title: undefined } as unknown as Finding, []);
 	assert.match(legacy.title, /^Insight \(Mem Topic\): c{89}\u2026$/);
 	assert.doesNotMatch(legacy.content, /## Experiment/);
 });

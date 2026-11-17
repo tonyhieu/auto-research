@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { PAPERS, VALID, why } from "./records.ts";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,13 +19,13 @@ import { verifierPrompt } from "../src/prompts.ts";
 import { ensureTopic } from "../src/topic.ts";
 import { taskTools } from "../src/tools.ts";
 
-const base = { author: "a", evidence: "e", sources: ["p"], status: "unverified" as const };
+const base = { ...VALID, author: "a", status: "unverified" as const };
 const verdict = (t: { verifications: string }, findingId: string, check: "citation" | "adversarial" | "novelty", v: "pass" | "fail" | "inconclusive") =>
-	appendVerification(t.verifications, { findingId, check, verdict: v, rationale: `${check} said ${v}`, sources: ["a", "b", "c", "d", "e"], by: "ver-1" });
+	appendVerification(t.verifications, { findingId, check, verdict: v, rationale: why(`${check} said ${v}`), sources: PAPERS, by: "ver-1" });
 
 function setup() {
 	const t = ensureTopic("fu", mkdtempSync(join(tmpdir(), "ar-")));
-	const f = appendFinding(t.ledger, { ...base, kind: "insight", claim: "the claim" });
+	const f = appendFinding(t.ledger, { ...base, kind: "insight", claim: "the claim is the claim under test" });
 	const vt = createTask(t.tasks, `Verify ${f.id}`, "c", { type: "verify", findingId: f.id });
 	updateTask(t.tasks, { ...vt, status: "done" });
 	verdict(t, f.id, "citation", "pass");
@@ -78,7 +79,7 @@ test("task_create validates addressed finding ids", async () => {
 test("re-verifier prompt includes earlier verdicts and follow-up tasks", () => {
 	const { t, f } = setup();
 	const fu = createTask(t.tasks, "test the objection", "d", { addresses: [f.id] });
-	const p = verifierPrompt(f, [{ id: "v", ts: "t", findingId: f.id, check: "adversarial", verdict: "inconclusive", rationale: "hidden assumption", sources: [], by: "ver-1" }], [fu]);
+	const p = verifierPrompt(f, [{ id: "v", ts: "t", findingId: f.id, check: "adversarial", verdict: "inconclusive", rationale: why("hidden assumption"), sources: [], by: "ver-1" }], [fu]);
 	assert.match(p, /RE-VERIFICATION/);
 	assert.match(p, /adversarial=inconclusive \(ver-1\): hidden assumption/);
 	assert.match(p, new RegExp(`${fu.id}: test the objection`));
@@ -88,8 +89,8 @@ test("re-verifier prompt includes earlier verdicts and follow-up tasks", () => {
 // Integration with the real pi memory script (~/memory/scripts/add.py) against a temp root.
 test("promotion writes verified+novel insights once and a digest, in pi memory format", { skip: !existsSync(join(process.env.HOME ?? "", "memory/scripts/add.py")) }, () => {
 	const t = ensureTopic("Promo Topic", mkdtempSync(join(tmpdir(), "ar-")));
-	const novel = appendFinding(t.ledger, { ...base, kind: "insight", claim: "novel claim" });
-	const known = appendFinding(t.ledger, { ...base, kind: "insight", claim: "known claim" });
+	const novel = appendFinding(t.ledger, { ...base, kind: "insight", claim: "novel claim is the claim under test" });
+	const known = appendFinding(t.ledger, { ...base, kind: "insight", claim: "known claim is the claim under test" });
 	for (const [f, n] of [[novel, "pass"], [known, "fail"]] as const) {
 		verdict(t, f.id, "citation", "pass");
 		verdict(t, f.id, "adversarial", "pass");

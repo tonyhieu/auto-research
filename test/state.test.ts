@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { VALID } from "./records.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ const f = (id: string, ts: string, claim: string, extra: Partial<Finding> = {}):
 	id,
 	ts,
 	author: "a",
+	title: "t",
 	claim,
 	evidence: "",
 	sources: ["p"],
@@ -42,16 +44,18 @@ test("queryFindings filters by status/taskId/since and caps with limit", () => {
 const call = (tool: { execute: Function }, params: object) => tool.execute("id", params, undefined, undefined, {});
 const out = (r: { content: { text: string }[] }) => r.content[0].text;
 
-test("ledger_list truncates long claims and reports counts; ledger_get returns full evidence", async () => {
+test("ledger_list shows titles and reports counts; ledger_get returns the full finding and experiment", async () => {
 	const t = ensureTopic("lt", mkdtempSync(join(tmpdir(), "ar-")));
 	const long = "x".repeat(500);
-	const rec = appendFinding(t.ledger, { author: "a", claim: long, evidence: "full evidence here", sources: ["p1"], status: "unverified" });
+	const experiment = { setup: "Toy setup: 3 seeds, n=100, logistic regression.", results: "| seed | acc |\n|---|---|\n| 0 | 0.91 |" };
+	const rec = appendFinding(t.ledger, { ...VALID, author: "a", kind: "insight", title: "Short headline", claim: long, evidence: "full evidence here, long enough to pass the minimum", experiment, status: "unverified" });
 	const lt = ledgerTools(t, "a");
 	const listed = out(await call(lt.list, {}));
-	assert.match(listed, /^Showing 1 of 1 matching \(1 total\)\./);
-	assert.ok(listed.length < 400, "claim truncated");
+	assert.match(listed, /^Showing 1 of 1 matching \(1 total\)\.\n.* Short headline \(sources:/);
+	assert.ok(!listed.includes("xxx"), "row shows the title, not the claim");
 	const got = out(await call(lt.get, { ids: [rec.id, "f-nope"] }));
-	assert.match(got, /Evidence: full evidence here/);
+	assert.match(got, /Title: Short headline\nClaim: x{500}\nEvidence: full evidence here/);
+	assert.match(got, /Experiment setup: Toy setup[\s\S]*Experiment results: \| seed \| acc \|/);
 	assert.match(got, /Not found: f-nope/);
 	assert.equal(readFindings(t.ledger).length, 1);
 });
