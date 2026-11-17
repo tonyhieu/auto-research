@@ -35,11 +35,12 @@ export function insightSlug(topic: TopicPaths, f: Finding): string {
 	return `${topic.slug}-${f.id}`;
 }
 
-function insightEntry(topic: TopicPaths, f: Finding, vs: Verification[]): Entry {
+export function insightEntry(topic: TopicPaths, f: Finding, vs: Verification[]): Entry {
 	const checks = vs.map((v) => `- **${v.check}: ${v.verdict}** (${v.by}, ${v.ts.slice(0, 10)}): ${v.rationale}`).join("\n");
+	const experiment = f.experiment ? `\n\n## Experiment\n### Setup\n${f.experiment.setup}\n\n### Results\n${f.experiment.results}` : "";
 	return {
 		slug: insightSlug(topic, f),
-		title: `Insight (${topic.title}): ${clip(f.claim, 90)}`,
+		title: `Insight (${topic.title}): ${f.title ?? clip(f.claim, 90)}`,
 		type: "research",
 		tags: [topic.slug, "auto-research", "verified", "novel", f.kind ?? "insight"],
 		content: `# ${f.claim}
@@ -47,7 +48,7 @@ function insightEntry(topic: TopicPaths, f: Finding, vs: Verification[]): Entry 
 Verified and novel finding \`${f.id}\` from the auto-research topic "${topic.title}" (by ${f.author}, ${f.ts.slice(0, 10)}).
 
 ## Evidence
-${f.evidence}
+${f.evidence}${experiment}
 
 ## Sources
 ${f.sources.map((s) => `- ${s}`).join("\n")}
@@ -93,7 +94,7 @@ export function promoteToMemory(topic: TopicPaths, reportPath?: string): Promoti
 		const entry: Entry = {
 			...e,
 			status: "archived",
-			title: `Superseded (${now}): ${clip(f.claim, 80)}`,
+			title: `Superseded (${now}): ${f.title ?? clip(f.claim, 80)}`,
 			tags: [topic.slug, "auto-research", "superseded", f.kind ?? "insight"],
 			content: `**Superseded: this finding is now ${now}; see the verification section for why.**\n\n${e.content}`,
 		};
