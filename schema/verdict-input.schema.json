@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "check": {
+      "enum": [
+        "citation",
+        "adversarial",
+        "novelty",
+        "reproduce"
+      ],
+      "title": "Check",
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    },
+    "rationale": {
+      "description": "Markdown. Quotes, counterexamples, computation results, queries run.",
+      "maxLength": 2000,
+      "minLength": 40,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "pattern": "^(f-[0-9a-f]{8}|[0-9a-f]{40}|arXiv:\\S+|DOI:\\S+|CorpusId:\\d+)$",
+        "type": "string"
+      },
+      "maxItems": 40,
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "check",
+    "verdict",
+    "rationale"
+  ],
+  "title": "VerdictInput",
+  "type": "object"
+}

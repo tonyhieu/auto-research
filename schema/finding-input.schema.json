@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "literature",
+        "gap",
+        "insight"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "title": {
+      "description": "Short headline shown in lists.",
+      "maxLength": 100,
+      "minLength": 8,
+      "pattern": "^[^\\n]+$",
+      "title": "Title",
+      "type": "string"
+    },
+    "claim": {
+      "description": "One atomic, checkable claim.",
+      "maxLength": 1000,
+      "minLength": 20,
+      "pattern": "^[^\\n]+$",
+      "title": "Claim",
+      "type": "string"
+    },
+    "evidence": {
+      "description": "Markdown. Why the sources support the claim.",
+      "maxLength": 4000,
+      "minLength": 40,
+      "title": "Evidence",
+      "type": "string"
+    },
+    "experiment": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "setup": {
+              "description": "Markdown. Data, model, parameters, seeds: enough to rerun without the author's files.",
+              "maxLength": 2500,
+              "minLength": 40,
+              "title": "Setup",
+              "type": "string"
+            },
+            "results": {
+              "description": "Markdown. Numbers, preferably a table; state n/seeds and spread.",
+              "maxLength": 2500,
+              "minLength": 20,
+              "title": "Results",
+              "type": "string"
+            }
+          },
+          "required": [
+            "setup",
+            "results"
+          ],
+          "title": "Experiment",
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional. Setup and results of a computation the finding rests on."
+    },
+    "sources": {
+      "items": {
+        "pattern": "^(f-[0-9a-f]{8}|[0-9a-f]{40}|arXiv:\\S+|DOI:\\S+|CorpusId:\\d+)$",
+        "type": "string"
+      },
+      "maxItems": 40,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "title",
+    "claim",
+    "evidence",
+    "sources"
+  ],
+  "title": "FindingInput",
+  "type": "object"
+}
