@@ -1,12 +1,16 @@
 """Read-only JSON API over topics/<slug>/ ledgers, plus the static app in ui/static/."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from arui import runs
 from arui.derive import checks, latest_focus, orchestrator_heading, superseded
+from arui.events import Events
 from arui.render import rendered
 from arui.store import Store, Topic, list_docs, read_doc
 
@@ -85,7 +89,17 @@ def finding_detail(t: Topic, fid: str) -> dict:
 
 
 def create_app(store: Store) -> FastAPI:
-    app = FastAPI(title="arui")
+    events = Events(store.root)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Lifespan only runs under a server (or `with TestClient`), so plain API tests start no watcher.
+        task = asyncio.create_task(events.watch())
+        yield
+        task.cancel()
+
+    app = FastAPI(title="arui", lifespan=lifespan)
+    app.state.events = events
 
     def topic(slug: str) -> Topic:
         t = store.get(slug)
@@ -126,6 +140,10 @@ def create_app(store: Store) -> FastAPI:
     def run_list(slug: str):
         t = topic(slug)
         return runs.fold(runs.read_events(t.dir), runs.lock_pid(t.dir))
+
+    @app.get("/api/events")
+    def event_stream():
+        return StreamingResponse(events.stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     # Mounted last so /api routes take precedence; html=True serves index.html at /.
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
