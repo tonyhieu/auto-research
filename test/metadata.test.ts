@@ -9,9 +9,15 @@ import { appendFinding, type Finding } from "../src/ledger.ts";
 import { insightEntry } from "../src/memory.ts";
 import { recordRunEnd, recordRunStart } from "../src/runs.ts";
 import { getPaper, searchPapers, setPaperCache } from "../src/s2.ts";
-import { ensureTopic, REPO_ROOT } from "../src/topic.ts";
+import { ensureTopic, REPO_ROOT, slugify } from "../src/topic.ts";
 
 const lines = (path: string) => readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+// Shared with ui/tests (the server's slugify port), so both compute the same topic dir.
+test("slugify matches the shared title -> slug fixture", () => {
+	const pairs: [string, string][] = JSON.parse(readFileSync(join(REPO_ROOT, "test/fixtures/slugify.json"), "utf8"));
+	for (const [title, slug] of pairs) assert.equal(slugify(title), slug, JSON.stringify(title));
+});
 
 test("ensureTopic writes topic.json once with the real title", () => {
 	const root = mkdtempSync(join(tmpdir(), "ar-"));
