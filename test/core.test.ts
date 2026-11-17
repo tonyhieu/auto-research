@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parseUsage, UsageProbe } from "../src/usage.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { acquireLock, ensureTopic, slugify } from "../src/topic.ts";
-import { appendFinding, createTask, listTasks, readFindings } from "../src/ledger.ts";
+import { appendFinding, applyVerifications, createTask, listTasks, readFindings } from "../src/ledger.ts";
 
 test("parseUsage prefers limits[] session entry", () => {
 	const s = parseUsage({
@@ -61,4 +61,10 @@ test("acquireLock: fresh lock is taken, a live holder blocks, a stale one is rep
 	writeFileSync(stale, "999999999"); // no such pid
 	assert.equal(acquireLock(stale), true);
 	assert.equal(readFileSync(stale, "utf8"), String(process.pid));
+});
+
+test("applyVerifications matches the shared derivation fixture (also run by ui/tests/test_derive.py)", () => {
+	const fx = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "derivation.json"), "utf8"));
+	const got = Object.fromEntries(applyVerifications(fx.findings, fx.verifications).map((f) => [f.id, { status: f.status, novelty: f.novelty ?? null }]));
+	assert.deepEqual(got, fx.expected);
 });

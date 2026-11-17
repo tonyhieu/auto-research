@@ -3,7 +3,14 @@ name = "arui"
 version = "0.1.0"
 description = "Local web UI and ledger schema for the auto-research harness"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2"]
+dependencies = [
+    "fastapi>=0.163.1",
+    "httpx>=0.28.1",
+    "linkify-it-py>=2.2.0",
+    "markdown-it-py>=4.3.0",
+    "pydantic>=2",
+    "uvicorn>=0.54.0",
+]
 
 [project.scripts]
 arui = "arui.__main__:main"
