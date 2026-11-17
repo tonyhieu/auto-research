@@ -1,0 +1,25 @@
+[project]
+name = "arui"
+version = "0.1.0"
+description = "Local web UI and ledger schema for the auto-research harness"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2"]
+
+[project.scripts]
+arui = "arui.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 160

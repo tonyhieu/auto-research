@@ -1,0 +1,114 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "check": {
+      "enum": [
+        "citation",
+        "adversarial",
+        "novelty",
+        "reproduce"
+      ],
+      "title": "Check",
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    },
+    "rationale": {
+      "description": "Markdown. Quotes, counterexamples, computation results, queries run.",
+      "maxLength": 2000,
+      "minLength": 40,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "pattern": "^(f-[0-9a-f]{8}|[0-9a-f]{40}|arXiv:\\S+|DOI:\\S+|CorpusId:\\d+)$",
+        "type": "string"
+      },
+      "maxItems": 40,
+      "title": "Sources",
+      "type": "array"
+    },
+    "id": {
+      "pattern": "^v-[0-9a-f]{8}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    },
+    "findingId": {
+      "title": "Findingid",
+      "type": "string"
+    },
+    "by": {
+      "title": "By",
+      "type": "string"
+    },
+    "focus": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "pattern": "^fx-[0-9a-f]{8}$",
+              "title": "Key",
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "holds",
+                "holds_with_limits",
+                "fails"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "narrowedFindingId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Narrowedfindingid"
+            }
+          },
+          "required": [
+            "key",
+            "outcome"
+          ],
+          "title": "FocusOutcome",
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "check",
+    "verdict",
+    "rationale",
+    "id",
+    "ts",
+    "findingId",
+    "by"
+  ],
+  "title": "Verification",
+  "type": "object"
+}
