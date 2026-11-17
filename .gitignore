@@ -221,6 +221,7 @@ __marimo__/
 
 # research output
 topics/
+pre-prints/
 node_modules/
 
 # research briefs (personal/project context)

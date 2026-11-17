@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entry point: preprint -t "Topic" -f <finding id> [-k <focus key>] [-o out.md]
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec caffeinate -i "$DIR/node_modules/.bin/tsx" "$DIR/src/preprint.ts" "$@"

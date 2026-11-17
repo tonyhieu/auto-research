@@ -16,6 +16,8 @@ from arui.models import FindingInput, RunEnd, RunEvent, RunStart
 EVENT = TypeAdapter(RunEvent)
 REPO = Path(__file__).resolve().parents[2]
 RESEARCH = REPO / "bin" / "research"
+PREPRINT = REPO / "bin" / "preprint"
+PREPRINTS = REPO / "pre-prints"
 BRIEF_CAP = 12_000  # as in topic.ts
 SPAWN_GRACE_S = 2.0  # a child that exits this fast failed before its run log existed
 TAIL_CHARS = 2000
@@ -130,11 +132,13 @@ class SpawnError(Exception):
 
 
 class Launcher:
-    """Spawns detached bin/research runs. The CLI's topic lock is the real guard; `procs` only covers a child's startup."""
+    """Spawns detached bin/research runs. The CLI's topic lock is the real guard; `procs` only covers a child's startup.
+    Also spawns bin/preprint, which takes no lock, so `preprints` is its only guard."""
 
-    def __init__(self, root: Path, research: Path = RESEARCH):
-        self.root, self.research = root, research
+    def __init__(self, root: Path, research: Path = RESEARCH, preprint: Path = PREPRINT):
+        self.root, self.research, self.preprint = root, research, preprint
         self.procs: dict[str, subprocess.Popen] = {}  # slug -> last child spawned for it
+        self.preprints: dict[str, tuple[subprocess.Popen, Path]] = {}  # slug -> last pre-print child and its output .md
         self.mutex = threading.Lock()  # check-then-spawn is atomic across request threads
 
     def busy(self, slug: str) -> bool:
@@ -156,7 +160,36 @@ class Launcher:
             brief_path = ui / f"{slug}-{stamp}.brief.md"
             brief_path.write_text(brief)
             args += ["-b", str(brief_path)]
-        out = ui / f"{slug}-{stamp}.out"
+        proc, out = self.popen(args, ui / f"{slug}-{stamp}.out")
+        self.procs[slug] = proc
+        return proc, out
+
+    def preprint_busy(self, slug: str) -> bool:
+        p = self.preprints.get(slug)
+        return p is not None and p[0].poll() is None
+
+    def spawn_preprint(self, slug: str, title: str, finding_id: str, focus_key: str | None) -> tuple[subprocess.Popen, Path]:
+        """Start bin/preprint (call under `mutex`, after `preprint_busy`); it may run alongside a research run."""
+        ui = self.root / ".ui"
+        ui.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(UTC)
+        md = PREPRINTS / slug / f"pre-print-{now.strftime('%Y-%m-%dT%H%M%S')}.md"
+        args = [str(self.preprint), "-t", title, "-f", finding_id, "-o", str(md)] + (["-k", focus_key] if focus_key else [])
+        proc, out = self.popen(args, ui / f"{slug}-preprint-{now.strftime('%Y-%m-%dT%H-%M-%S-%f')}.out")
+        self.preprints[slug] = (proc, md)
+        return proc, out
+
+    def preprint_status(self, slug: str) -> dict:
+        """The last pre-print spawned for `slug` since the server started; path is relative to the repo."""
+        p = self.preprints.get(slug)
+        if p is None:
+            return {"running": False, "exitCode": None, "path": None}
+        proc, md = p
+        code = proc.poll()
+        return {"running": code is None, "exitCode": code, "path": str(md.relative_to(PREPRINTS.parent))}
+
+    @staticmethod
+    def popen(args: list[str], out: Path) -> tuple[subprocess.Popen, Path]:
         with out.open("wb") as f:
             # New session: stopping the server (or Ctrl-C in its terminal) does not stop the run.
             proc = subprocess.Popen(
@@ -168,7 +201,6 @@ class Launcher:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        self.procs[slug] = proc
         return proc, out
 
     @staticmethod

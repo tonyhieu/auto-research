@@ -135,9 +135,9 @@ def finding_detail(t: Topic, fid: str) -> dict:
     }
 
 
-def create_app(store: Store, research: Path = runs.RESEARCH) -> FastAPI:
+def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = runs.PREPRINT) -> FastAPI:
     events = Events(store.root)
-    launcher = runs.Launcher(store.root, research)
+    launcher = runs.Launcher(store.root, research, preprint)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -237,6 +237,25 @@ def create_app(store: Store, research: Path = runs.RESEARCH) -> FastAPI:
         if pid is None:
             raise HTTPException(404, f"topic {slug} is not running")
         return {"pid": pid}
+
+    @app.get("/api/topics/{slug}/preprint")
+    def preprint_status(slug: str):
+        topic(slug)
+        return launcher.preprint_status(slug)
+
+    @app.post("/api/topics/{slug}/preprint", status_code=202, dependencies=[Depends(local_json)])
+    def preprint_start(slug: str):
+        """Write a pre-print of the current main hypothesis's finding and its related findings."""
+        t = topic(slug)
+        m = main_hypothesis(t)
+        if not m or not m["findingId"]:
+            raise HTTPException(422, "no main finding to write a pre-print of")
+        with launcher.mutex:
+            if launcher.preprint_busy(slug):
+                raise HTTPException(409, f"a pre-print of {slug} is already being written")
+            spawned = launcher.spawn_preprint(slug, t.title, m["findingId"], m["focusKey"])
+        pid = settle_or_500(*spawned)
+        return {**launcher.preprint_status(slug), "findingId": m["findingId"], "pid": pid}
 
     @app.post("/api/render", dependencies=[Depends(local_json)])
     def render_md(body: RenderRequest):
