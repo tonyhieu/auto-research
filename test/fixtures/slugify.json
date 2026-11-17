@@ -1,0 +1,13 @@
+[
+  ["Diversity-weighted synthetic data", "diversity-weighted-synthetic-data"],
+  ["Diffusion: Models!", "diffusion-models"],
+  ["  leading and trailing  ", "leading-and-trailing"],
+  ["--already--dashed--", "already-dashed"],
+  ["CamelCase And 20 Newsgroups", "camelcase-and-20-newsgroups"],
+  ["a/b\\c..d", "a-b-c-d"],
+  ["Café résumé", "caf-r-sum"],
+  ["\u212Aelvin sign", "kelvin-sign"],
+  ["x\n\ty", "x-y"],
+  ["!!!", ""],
+  ["", ""]
+]
