@@ -14,8 +14,12 @@ export interface Finding {
 	taskId?: string;
 	/** Missing on entries written before kinds existed. */
 	kind?: FindingKind;
+	/** Short headline; missing on entries written before the v2 schema. */
+	title?: string;
 	claim: string;
 	evidence: string;
+	/** Setup and results of a computation the finding rests on (Markdown). */
+	experiment?: { setup: string; results: string };
 	/** Semantic Scholar paperIds (or other stable ids) backing the claim. */
 	sources: string[];
 	/** As written; the effective status comes from verifications (see loadFindings). */

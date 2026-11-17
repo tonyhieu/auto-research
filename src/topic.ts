@@ -18,6 +18,10 @@ export interface TopicPaths {
 	reports: string;
 	/** Optional user-written starting point (goals, context, leads, constraints). */
 	brief: string;
+	/** Append-only run start/end events (state/runs.jsonl). */
+	runs: string;
+	/** Append-only Semantic Scholar metadata cache, one line per paper. */
+	papers: string;
 }
 
 export function slugify(topic: string): string {
@@ -44,12 +48,17 @@ export function ensureTopic(title: string, root = join(REPO_ROOT, "topics")): To
 		notes: join(dir, "notes"),
 		reports: join(dir, "reports"),
 		brief: join(dir, "brief.md"),
+		runs: join(dir, "state", "runs.jsonl"),
+		papers: join(dir, "papers.jsonl"),
 	};
 	for (const d of [p.memory, p.state, p.tasks, p.notes, p.reports]) mkdirSync(d, { recursive: true });
 	for (const f of [p.ledger, p.verifications]) if (!existsSync(f)) writeFileSync(f, "");
 	if (!existsSync(p.orchestratorState)) {
 		writeFileSync(p.orchestratorState, `# Orchestrator state: ${title}\n\n(no epochs run yet)\n`);
 	}
+	// The real title (the slug is lossy), so other tools can start runs on this topic.
+	const meta = join(dir, "topic.json");
+	if (!existsSync(meta)) writeFileSync(meta, JSON.stringify({ slug, title, created: new Date().toISOString() }, null, 2) + "\n");
 	return p;
 }
 

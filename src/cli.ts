@@ -1,10 +1,12 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { runController } from "./controller.ts";
 import { FINDING_ID, resolveFocus } from "./focus.ts";
 import { readFindings, resetStaleClaims } from "./ledger.ts";
+import { recordRunEnd, recordRunStart } from "./runs.ts";
+import { setPaperCache } from "./s2.ts";
 import { killAllSandboxes } from "./sandbox.ts";
 import { acquireLock, BRIEF_CAP, ensureTopic, readBrief, REPO_ROOT } from "./topic.ts";
 import { UsageProbe } from "./usage.ts";
@@ -61,10 +63,16 @@ if (!acquireLock(lock)) {
 	console.error(`topic "${topic.slug}" is already running (pid ${readFileSync(lock, "utf8")})`);
 	process.exit(1);
 }
+let runId: string | undefined;
 // Sync only: the exit handler cannot await, and sandbox kill timers die with the process.
-process.on("exit", () => {
+process.on("exit", (code) => {
 	killAllSandboxes();
-	if (existsSync(lock)) unlinkSync(lock);
+	// Before the lock goes, so readers see the end event once unlocked; a failed write still frees the lock.
+	try {
+		if (runId) recordRunEnd(topic, runId, code);
+	} finally {
+		if (existsSync(lock)) unlinkSync(lock);
+	}
 });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
 
@@ -79,6 +87,16 @@ const log = (line: string) => {
 log(`topic=${topic.slug} windows=${windows} concurrency=${concurrency} log=${logFile}`);
 const focus = target ? resolveFocus(topic, target) : undefined;
 if (focus) log(`focus ${focus.key} (started ${focus.started}): ${focus.target}; state ${focus.state}`);
+runId = recordRunStart(topic, {
+	pid: process.pid,
+	mode: focus ? "focus" : "breadth",
+	...(focus ? { focusKey: focus.key, target: focus.target } : {}),
+	windows,
+	concurrency,
+	log: relative(topic.dir, logFile),
+	origin: process.env.RESEARCH_ORIGIN === "ui" ? "ui" : "cli",
+});
+setPaperCache(topic.papers);
 const brief = readBrief(topic);
 log(brief ? `brief: ${topic.brief} (${brief.length} chars)` : "brief: none (agents see only the topic title; pass -b brief.md)");
 const stale = resetStaleClaims(topic.tasks);

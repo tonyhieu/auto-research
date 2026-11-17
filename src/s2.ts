@@ -1,5 +1,7 @@
 // Semantic Scholar Graph API client. One process-wide limiter: the API 429s
 // at ~1 req/s even with a key, and all agents share this process.
+import { appendFileSync } from "node:fs";
+
 const BASE = "https://api.semanticscholar.org/graph/v1";
 const MIN_GAP_MS = 1100;
 const MAX_RETRIES = 5;
@@ -53,15 +55,37 @@ export interface Paper {
 	externalIds?: Record<string, string>;
 }
 
+let cachePath: string | undefined;
+const cached = new Set<string>();
+
+/** Append metadata of every paper seen to this file (one process per topic, so one writer). */
+export function setPaperCache(path: string): void {
+	cachePath = path;
+	cached.clear();
+}
+
+function cachePapers(papers: Paper[]): void {
+	if (!cachePath) return;
+	for (const p of papers) {
+		if (!p?.paperId || cached.has(p.paperId)) continue;
+		cached.add(p.paperId);
+		const authors = (p.authors ?? []).slice(0, 3).map((a) => a.name);
+		appendFileSync(cachePath, JSON.stringify({ paperId: p.paperId, title: p.title, year: p.year, venue: p.venue, authors }) + "\n");
+	}
+}
+
 export async function searchPapers(query: string, limit = 10, year?: string): Promise<Paper[]> {
 	const params: Record<string, string | number> = { query, limit, fields: PAPER_FIELDS };
 	if (year) params.year = year;
 	const json = (await get("/paper/search", params)) as { data?: Paper[] };
+	cachePapers(json.data ?? []);
 	return json.data ?? [];
 }
 
 export async function getPaper(id: string): Promise<Paper> {
-	return (await get(`/paper/${encodeURIComponent(id)}`, { fields: PAPER_FIELDS })) as Paper;
+	const p = (await get(`/paper/${encodeURIComponent(id)}`, { fields: PAPER_FIELDS })) as Paper;
+	cachePapers([p]);
+	return p;
 }
 
 /** Compact, model-friendly rendering of a paper. */
