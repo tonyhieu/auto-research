@@ -7,7 +7,7 @@ import type { TopicPaths } from "./topic.ts";
 
 // Writes go through the pi memory system's own add.py with --root pointed at the
 // topic's .pi/memory, so entries match ~/memory's format without touching it.
-const ADD_PY = process.env.MEMORY_ADD_SCRIPT ?? join(homedir(), "memory", "scripts", "add.py");
+export const ADD_PY = process.env.MEMORY_ADD_SCRIPT ?? join(homedir(), "memory", "scripts", "add.py");
 
 interface Entry {
 	slug: string;
