@@ -7,6 +7,7 @@ from html import escape
 from markdown_it import MarkdownIt
 from markdown_it.rules_core import StateCore
 from markdown_it.token import Token
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 
 ID = re.compile(r"\b(f-[0-9a-f]{8}|t-[0-9a-f]{8}|fx-[0-9a-f]{8}|[0-9a-f]{40})\b")
 
@@ -68,6 +69,8 @@ def link_ids(state: StateCore) -> None:
 
 # html=False escapes raw HTML in agent text, so no sanitizer is needed.
 MD = MarkdownIt("commonmark", {"html": False, "linkify": True}).enable(["table", "strikethrough", "linkify"])
+# $..$ / $$..$$ become escaped .math spans/divs that the client typesets with KaTeX; no digits/spaces at the edges keeps "$5 and $10" plain.
+MD.use(dollarmath_plugin, allow_space=False, allow_digits=False, double_inline=True)
 MD.core.ruler.push("link_ids", link_ids)
 
 
