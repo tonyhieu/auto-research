@@ -152,3 +152,12 @@ def test_reloads_after_append(client, topics):
     with open(topics / SLUG / "ledger.jsonl", "a") as f:
         f.write("\n" + jsonl({**FINDING, "id": "f-33333333"}))
     assert client.get(f"/api/topics/{SLUG}").json()["counts"]["total"] == 3
+
+
+def test_serves_static_app(client):
+    r = client.get("/")
+    assert r.status_code == 200 and '<script type="module" src="/app.js">' in r.text
+    assert "javascript" in client.get("/app.js").headers["content-type"]
+    assert client.get("/app.css").status_code == 200
+    assert client.get("/api/topics").status_code == 200
+    assert client.get("/api/nope").status_code == 404  # not index.html
