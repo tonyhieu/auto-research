@@ -82,6 +82,17 @@ def validate(slug: str, topics: Path = TOPICS) -> int:
     return 1 if failures else 0
 
 
+def serve(port: int) -> int:
+    import uvicorn
+
+    from arui.server import create_app
+    from arui.store import Store
+
+    # Localhost only: there is no auth.
+    uvicorn.run(create_app(Store(TOPICS)), host="127.0.0.1", port=port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="arui")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -89,9 +100,13 @@ def main(argv: list[str] | None = None) -> int:
     exp.add_argument("--check", action="store_true", help="exit non-zero if the committed files differ")
     val = sub.add_parser("validate", help="validate a topic's ledger and verifications")
     val.add_argument("slug")
+    srv = sub.add_parser("serve", help="serve the UI API on 127.0.0.1")
+    srv.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
     if args.cmd == "export-schema":
         return export_schema(args.check)
+    if args.cmd == "serve":
+        return serve(args.port)
     return validate(args.slug)
 
 

@@ -1,0 +1,429 @@
+{
+  "_comment": "Shared by test/core.test.ts (applyVerifications) and ui/tests/test_derive.py; keep the two derivations in sync.",
+  "findings": [
+    {
+      "id": "f-00000001",
+      "ts": "2026-11-01T00:00:01.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 1",
+      "claim": "Fixture claim number 1 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000002",
+      "ts": "2026-11-01T00:00:02.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 2",
+      "claim": "Fixture claim number 2 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000003",
+      "ts": "2026-11-01T00:00:03.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 3",
+      "claim": "Fixture claim number 3 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000004",
+      "ts": "2026-11-01T00:00:04.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 4",
+      "claim": "Fixture claim number 4 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000005",
+      "ts": "2026-11-01T00:00:05.000Z",
+      "author": "sub-1",
+      "kind": "gap",
+      "title": "Fixture finding 5",
+      "claim": "Fixture claim number 5 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000006",
+      "ts": "2026-11-01T00:00:06.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 6",
+      "claim": "Fixture claim number 6 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000007",
+      "ts": "2026-11-01T00:00:07.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 7",
+      "claim": "Fixture claim number 7 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-00000008",
+      "ts": "2026-11-01T00:00:08.000Z",
+      "author": "sub-1",
+      "kind": "literature",
+      "title": "Fixture finding 8",
+      "claim": "Fixture claim number 8 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "verified"
+    },
+    {
+      "id": "f-00000009",
+      "ts": "2026-11-01T00:00:09.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 9",
+      "claim": "Fixture claim number 9 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "unverified"
+    },
+    {
+      "id": "f-0000000a",
+      "ts": "2026-11-01T00:00:10.000Z",
+      "author": "sub-1",
+      "kind": "insight",
+      "title": "Fixture finding 10",
+      "claim": "Fixture claim number 10 for derivation drift tests.",
+      "evidence": "Evidence long enough to pass the schema minimum length.",
+      "sources": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "status": "refuted"
+    }
+  ],
+  "verifications": [
+    {
+      "id": "v-00000001",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000002",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000002",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000002",
+      "check": "adversarial",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000003",
+      "ts": "2026-11-02T00:00:03.000Z",
+      "findingId": "f-00000002",
+      "check": "novelty",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000004",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000003",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000005",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000003",
+      "check": "adversarial",
+      "verdict": "fail",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000006",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000004",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000007",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000004",
+      "check": "adversarial",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000008",
+      "ts": "2026-11-02T00:00:03.000Z",
+      "findingId": "f-00000004",
+      "check": "reproduce",
+      "verdict": "fail",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000009",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000005",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-0000000a",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000005",
+      "check": "adversarial",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-0000000b",
+      "ts": "2026-11-02T00:00:03.000Z",
+      "findingId": "f-00000005",
+      "check": "reproduce",
+      "verdict": "fail",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-0000000c",
+      "ts": "2026-11-02T00:00:04.000Z",
+      "findingId": "f-00000005",
+      "check": "novelty",
+      "verdict": "fail",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-0000000d",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000006",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-0000000e",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000006",
+      "check": "adversarial",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-0000000f",
+      "ts": "2026-11-02T00:00:03.000Z",
+      "findingId": "f-00000006",
+      "check": "reproduce",
+      "verdict": "inconclusive",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000010",
+      "ts": "2026-11-02T00:00:04.000Z",
+      "findingId": "f-00000006",
+      "check": "novelty",
+      "verdict": "inconclusive",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000011",
+      "ts": "2026-11-02T00:00:03.000Z",
+      "findingId": "f-00000007",
+      "check": "adversarial",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000012",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000007",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000013",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000007",
+      "check": "adversarial",
+      "verdict": "fail",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000014",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000008",
+      "check": "novelty",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000015",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-00000009",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000016",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000009",
+      "check": "adversarial",
+      "verdict": "fail",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000017",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-00000009",
+      "check": "adversarial",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000018",
+      "ts": "2026-11-02T00:00:01.000Z",
+      "findingId": "f-0000000a",
+      "check": "citation",
+      "verdict": "pass",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    },
+    {
+      "id": "v-00000019",
+      "ts": "2026-11-02T00:00:02.000Z",
+      "findingId": "f-0000000a",
+      "check": "adversarial",
+      "verdict": "inconclusive",
+      "rationale": "Rationale long enough to pass the schema minimum length.",
+      "sources": [],
+      "by": "verifier-1"
+    }
+  ],
+  "expected": {
+    "f-00000001": {
+      "status": "unverified",
+      "novelty": null
+    },
+    "f-00000002": {
+      "status": "verified",
+      "novelty": "novel"
+    },
+    "f-00000003": {
+      "status": "refuted",
+      "novelty": null
+    },
+    "f-00000004": {
+      "status": "refuted",
+      "novelty": null
+    },
+    "f-00000005": {
+      "status": "verified",
+      "novelty": "known"
+    },
+    "f-00000006": {
+      "status": "unverified",
+      "novelty": null
+    },
+    "f-00000007": {
+      "status": "verified",
+      "novelty": null
+    },
+    "f-00000008": {
+      "status": "verified",
+      "novelty": "novel"
+    },
+    "f-00000009": {
+      "status": "verified",
+      "novelty": null
+    },
+    "f-0000000a": {
+      "status": "refuted",
+      "novelty": null
+    }
+  }
+}

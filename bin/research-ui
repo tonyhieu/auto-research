@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entry point: research-ui [--port 8765]; serves the ledger UI on 127.0.0.1.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec uv run --project "$DIR/ui" arui serve "$@"
