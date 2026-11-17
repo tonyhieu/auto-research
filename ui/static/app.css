@@ -156,6 +156,7 @@ pre.out{font-size:11px;background:var(--chip);padding:8px;border-radius:6px;over
 .md h1{font-size:17px}.md h2{font-size:15px}.md h3,.md h4{font-size:13px}
 .md code{font-size:.92em;background:var(--chip);padding:0 3px;border-radius:3px}
 .md pre{background:var(--chip);padding:8px 10px;border-radius:6px;overflow:auto}
+.md .math.block{margin:0 0 8px;overflow-x:auto;overflow-y:hidden}
 .md pre code{background:none;padding:0}
 .md table{border-collapse:collapse;display:block;overflow:auto;font-size:12px}
 .md th,.md td{border:1px solid var(--line);padding:3px 7px;text-align:left}

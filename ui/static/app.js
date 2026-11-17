@@ -53,6 +53,17 @@ function composeTarget(ids, direction) {
 }
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+// KaTeX loads on first use; if the CDN is unreachable the raw TeX stays visible.
+const KATEX = "https://cdn.jsdelivr.net/npm/katex@0.19.1/dist/katex.mjs";
+let katex;
+async function typeset(root) {
+  const els = root.querySelectorAll(".math");
+  if (!els.length) return;
+  katex ??= import(KATEX).then((m) => m.default);
+  const k = await katex.catch(() => null);
+  els.forEach((el) => k?.render(el.textContent, el, { displayMode: el.classList.contains("block"), throwOnError: false }));
+}
 const day = (ts) => (ts ? ts.slice(0, 10) : "");
 const minute = (ts) => (ts ? ts.slice(0, 16).replace("T", " ") : "");
 
@@ -522,6 +533,7 @@ function renderPane(keepScroll = false) {
   else if (state.detail.error) body = `<div class="warn">${esc(state.detail.error)}</div>`;
   else body = `<article class="dv"><div class="dvi">${state.view.type === "finding" ? findingHtml(state.detail) : docHtml(state.detail)}</div></article>`;
   $("pane").innerHTML = body;
+  typeset($("pane"));
   renderFoot();
   if (!keepScroll) $("pane").parentElement.scrollTop = 0;
   syncRunControls();

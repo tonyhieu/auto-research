@@ -38,3 +38,14 @@ def test_text_around_ids_stays_escaped_and_code_is_not_linked():
 def test_inline_has_no_paragraph():
     assert render_inline("**t** f-0123abcd", CTX).startswith("<strong>t</strong>")
     assert not render_inline("x").startswith("<p>")
+
+
+def test_math_is_escaped_and_left_for_katex():
+    html = render("loss $a_i * b_j < c$ on f-0123abcd\n\n$$\n\\sum_i x_i\n$$", CTX)
+    assert '<span class="math inline">a_i * b_j &lt; c</span>' in html
+    assert '<div class="math block">\n\\sum_i x_i\n</div>' in html
+    assert 'data-finding="f-0123abcd"' in html
+
+
+def test_dollar_amounts_are_not_math():
+    assert "math" not in render("costs $5 and $10, or $ 3 $")
