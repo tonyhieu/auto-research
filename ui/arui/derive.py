@@ -1,5 +1,7 @@
 """Effective status, novelty, and buckets: a port of applyVerifications in src/ledger.ts (kept in sync by test/fixtures/derivation.json)."""
 
+import re
+from datetime import UTC, datetime
 from typing import Literal, NamedTuple
 
 from arui.models import Finding, Verification
@@ -45,6 +47,27 @@ def effective(f: Finding, latest: dict[str, Verification] | None) -> Effective:
 def apply_verifications(findings: list[Finding], vs: list[Verification]) -> dict[str, Effective]:
     latest = latest_verdicts(vs)
     return {f.id: effective(f, latest.get(f.id)) for f in findings}
+
+
+CITED = re.compile(r"\bf-[0-9a-f]{8}\b")
+
+
+def label(e: Effective) -> str:
+    return e.status + (f", {e.novelty}" if e.novelty else "")
+
+
+def citation_changes(text: str, written: datetime, findings: dict[str, Finding], vs: list[Verification], now: dict[str, Effective]) -> dict:
+    """Cited findings deleted since, or whose status/novelty differs from what verdicts up to `written` gave."""
+
+    def aware(d: datetime) -> datetime:
+        return d if d.tzinfo else d.replace(tzinfo=UTC)
+
+    ids = list(dict.fromkeys(CITED.findall(text)))
+    kept = [findings[i] for i in ids if i in findings]
+    before = apply_verifications(kept, [v for v in vs if aware(v.ts) <= written])
+    deleted = [i for i in ids if i not in findings]
+    changed = [{"id": f.id, "was": label(before[f.id]), "now": label(now[f.id])} for f in kept if before[f.id] != now[f.id]]
+    return {"cited": len(ids), "deleted": deleted, "changed": changed, "stale": bool(deleted or changed)}
 
 
 def bucket(e: Effective) -> Bucket:

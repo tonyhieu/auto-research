@@ -168,4 +168,11 @@ a.op:hover{text-decoration:underline;text-decoration-color:var(--accent)}
 .fid,.tid,.fxid{font-family:ui-monospace,Menlo,monospace;font-size:.92em}
 a.fid,a.tid,a.fxid{color:var(--accent)}
 .fid.removed{color:var(--muted);text-decoration:line-through;cursor:default}
+/* Live status of a cited finding (data-status from arui/render.py); the id keeps the accent color. */
+.fid[data-status]::after{content:attr(data-status);display:inline-block;margin-left:3px;padding:0 4px;border:1px solid currentColor;border-radius:6px;font-family:system-ui,sans-serif;font-size:9px;line-height:13px;vertical-align:1px}
+a.fid.st-verified::after{color:var(--ok)}a.fid.st-refuted::after{color:var(--bad)}a.fid.st-unverified::after{color:var(--warn)}
+.fid.removed[data-status]::after{text-decoration:none;color:var(--muted)}
+.stale{margin-top:12px;padding:8px 10px;border:1px solid var(--warn);border-radius:8px;font-size:12px}
+.stale .btn2{margin-top:6px;padding:3px 10px;font-size:12px}
+.ar .st{color:var(--warn);font-size:10px;margin-left:4px}
 a.paper{color:var(--accent)}

@@ -5,7 +5,7 @@ import { REPO_ROOT } from "./topic.ts";
 
 // Agent-written Python runs in Docker: no network, capped memory/CPU/pids,
 // read-only root, non-root user. Built from sandbox/Dockerfile.
-export const SANDBOX_IMAGE = "auto-research-py:2";
+export const SANDBOX_IMAGE = "auto-research-py:3";
 const MAX_OUTPUT = 8000;
 // Names of running containers, so the process can kill them on exit.
 const live = new Set<string>();

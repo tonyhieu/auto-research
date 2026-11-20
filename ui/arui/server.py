@@ -1,7 +1,10 @@
 """JSON API over topics/<slug>/ ledgers (read-only) and run control, plus the static app in ui/static/."""
 
 import asyncio
+import os
+import re
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -12,13 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from arui import runs
-from arui.derive import checks, latest_focus, orchestrator_heading, superseded
+from arui.derive import checks, citation_changes, latest_focus, orchestrator_heading, superseded
 from arui.events import Events
 from arui.models import OneLine
 from arui.render import rendered
 from arui.store import FINDING_ID, Store, Topic, list_docs, read_doc
 
 STATIC = Path(__file__).resolve().parents[1] / "static"
+# As in src/reports.ts: reports written by the controller's summarize.
+REPORT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{4}(-fx-[0-9a-f]{8})?-w\d+\.md$")
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
 
@@ -47,13 +52,15 @@ class RenderRequest(Body):
 
 def local_json(request: Request) -> None:
     """POST guard: JSON only (no CORS-simple form posts) from a localhost Host/Origin (no DNS rebinding)."""
+    # ARUI_ALLOWED_HOSTS (comma-separated) adds hosts, e.g. a `tailscale serve` name that proxies to us.
+    allowed = LOCAL_HOSTS | {h.strip() for h in os.environ.get("ARUI_ALLOWED_HOSTS", "").split(",") if h.strip()}
     if request.headers.get("content-type", "").split(";")[0].strip() != "application/json":
         raise HTTPException(415, "Content-Type must be application/json")
-    if urlsplit(f"//{request.headers.get('host', '')}").hostname not in LOCAL_HOSTS:
-        raise HTTPException(403, "Host must be localhost or 127.0.0.1")
+    if urlsplit(f"//{request.headers.get('host', '')}").hostname not in allowed:
+        raise HTTPException(403, "Host must be localhost, 127.0.0.1, or in ARUI_ALLOWED_HOSTS")
     origin = request.headers.get("origin")
-    if origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS:
-        raise HTTPException(403, "Origin must be localhost or 127.0.0.1")
+    if origin is not None and urlsplit(origin).hostname not in allowed:
+        raise HTTPException(403, "Origin must be localhost, 127.0.0.1, or in ARUI_ALLOWED_HOSTS")
 
 
 def settle_or_500(proc, out: Path) -> int:
@@ -81,6 +88,12 @@ def finding_row(t: Topic, fid: str) -> dict:
         "bucket": t.bucket(fid),
         "checks": checks(f, t.latest.get(fid)),
     }
+
+
+def report_citations(t: Topic, name: str, text: str) -> dict:
+    """A report is a snapshot: compare its cited findings with what the ledger said when it was written (file mtime)."""
+    written = datetime.fromtimestamp((t.dir / "reports" / name).stat().st_mtime, UTC)
+    return citation_changes(text, written, t.findings, t.verifications, t.effective)
 
 
 def main_hypothesis(t: Topic) -> dict | None:
@@ -135,9 +148,9 @@ def finding_detail(t: Topic, fid: str) -> dict:
     }
 
 
-def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = runs.PREPRINT) -> FastAPI:
+def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = runs.PREPRINT, regen: Path = runs.REGEN) -> FastAPI:
     events = Events(store.root)
-    launcher = runs.Launcher(store.root, research, preprint)
+    launcher = runs.Launcher(store.root, research, preprint, regen)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -174,7 +187,12 @@ def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = ru
 
     @app.get("/api/topics/{slug}/docs")
     def docs(slug: str):
-        return list_docs(topic(slug).dir)
+        t = topic(slug)
+        out = list_docs(t.dir)
+        for d in out:
+            if d["group"] == "reports" and (text := read_doc(t.dir, "reports", d["name"])) is not None:
+                d["stale"] = report_citations(t, d["name"], text)["stale"]
+        return out
 
     @app.get("/api/topics/{slug}/docs/{group}/{name}")
     def doc(slug: str, group: str, name: str):
@@ -183,7 +201,10 @@ def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = ru
         if text is None:
             raise HTTPException(404, f"no doc {group}/{name}")
         # reports/ and brief.md are not in the topic signature, so docs render fresh; they are read one at a time.
-        return {"group": group, "name": name, **rendered(text, t.links)}
+        out: dict[str, object] = {"group": group, "name": name, **rendered(text, t.links)}
+        if group == "reports":
+            out["citations"] = report_citations(t, name, text)
+        return out
 
     @app.get("/api/topics/{slug}/runs")
     def run_list(slug: str):
@@ -256,6 +277,30 @@ def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = ru
             spawned = launcher.spawn_preprint(slug, t.title, m["findingId"], m["focusKey"])
         pid = settle_or_500(*spawned)
         return {**launcher.preprint_status(slug), "findingId": m["findingId"], "pid": pid}
+
+    def report(slug: str, name: str) -> Topic:
+        t = topic(slug)
+        if read_doc(t.dir, "reports", name) is None:
+            raise HTTPException(404, f"no report {name}")
+        return t
+
+    @app.get("/api/topics/{slug}/reports/{name}/regenerate")
+    def regen_status(slug: str, name: str):
+        report(slug, name)
+        return launcher.regen_status(slug, name)
+
+    @app.post("/api/topics/{slug}/reports/{name}/regenerate", status_code=202, dependencies=[Depends(local_json)])
+    def regen_start(slug: str, name: str):
+        """Rewrite a window report against the current ledger; the old version moves to reports/.history/."""
+        t = report(slug, name)
+        if not REPORT_NAME.match(name):
+            raise HTTPException(422, f"{name} is not a window report, so it cannot be regenerated")
+        with launcher.mutex:
+            if launcher.regen_busy(slug, name):
+                raise HTTPException(409, f"{name} is already being regenerated")
+            spawned = launcher.spawn_regen(slug, t.title, name)
+        pid = settle_or_500(*spawned)
+        return {**launcher.regen_status(slug, name), "pid": pid}
 
     @app.post("/api/render", dependencies=[Depends(local_json)])
     def render_md(body: RenderRequest):

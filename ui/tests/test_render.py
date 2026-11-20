@@ -22,6 +22,14 @@ def test_links_known_and_removed_ids():
     assert 'data-doc="state/focus-fx-00000002.md"' in html
 
 
+def test_finding_status_badges():
+    ctx = LinkContext(findings={"f-0123abcd", "f-0000000b"}, status={"f-0123abcd": "refuted"})
+    html = render("f-0123abcd, f-0000000b and f-deadbeef", ctx)
+    assert '<a class="fid st-refuted" data-finding="f-0123abcd" href="#f-0123abcd" data-status="refuted" title="refuted">' in html
+    assert '<a class="fid" data-finding="f-0000000b" href="#f-0000000b">' in html, "no status known, no badge"
+    assert '<span class="fid removed" data-status="deleted" title="deleted from the ledger">f-deadbeef</span>' in html
+
+
 def test_paper_links_use_cached_title_escaped():
     html = render(f"Per {PAPER} and {'c' * 40}.", CTX)
     assert f'href="https://www.semanticscholar.org/paper/{PAPER}"' in html and ">A &lt;title&gt;</a>" in html

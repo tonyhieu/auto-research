@@ -121,11 +121,13 @@ def load_topic(topic: Path) -> Topic:
                 referenced_by.setdefault(s, []).append(f.id)
     orch = topic / "state" / "orchestrator.md"
     orchestrator = orch.read_text() if orch.exists() else ""
+    eff = apply_verifications(findings, vs)
     links = LinkContext(
         findings={f.id for f in findings},
         notes={p.stem for p in (topic / "notes").glob("*.md")},
         focus={p.stem.removeprefix("focus-") for p in (topic / "state").glob("focus-*.md") if is_doc("state", p.name)},
         papers={pid: p.title for pid, p in papers.items() if p.title},
+        status={fid: e.status for fid, e in eff.items()},
     )
     return Topic(
         slug=topic.name,
@@ -134,7 +136,7 @@ def load_topic(topic: Path) -> Topic:
         findings={f.id: f for f in findings},
         verifications=vs,
         invalid_lines=bad_f + bad_v,
-        effective=apply_verifications(findings, vs),
+        effective=eff,
         latest=latest_verdicts(vs),
         tasks=tasks,
         papers=papers,

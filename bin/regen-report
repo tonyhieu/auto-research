@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entry point: regen-report -t "Topic" -r <report name>
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec caffeinate -i "$DIR/node_modules/.bin/tsx" "$DIR/src/regen-report.ts" "$@"

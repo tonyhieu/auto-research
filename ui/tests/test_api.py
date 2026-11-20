@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from arui.server import create_app
 from arui.store import Store
 
 SLUG = "demo"
+REPORT = "2026-11-09T0400-w1.md"
 F2 = {**FINDING, "id": "f-22222222", "title": "Second finding title", "sources": ["f-89abcdef", "f-deadbeef"], "taskId": "t-00000001"}
 F2["experiment"] = {"setup": "Seeds 0-4, n=200, logistic regression on the cached embeddings.", "results": "| seed | acc |\n|---|---|\n| 0 | 0.8 |"}
 
@@ -43,6 +45,10 @@ def topics(tmp_path):
     )
     (t / "notes" / "t-00000001.md").write_text("# Note\n\nAbout f-89abcdef.")
     (t / "reports" / "r1.md").write_text("report")
+    # Written between f-89abcdef's adversarial fail (04:01) and pass (04:02): refuted then, verified and novel now.
+    (t / "reports" / REPORT).write_text("Cites f-89abcdef, f-22222222 and f-deadbeef.")
+    stamp = datetime(2026, 11, 9, 4, 1, 30, tzinfo=UTC).timestamp()
+    os.utime(t / "reports" / REPORT, (stamp, stamp))
     (t / "reports" / "r1.html").write_text("<p>report</p>")
     (t / "brief.md").write_text("brief")
     (t / "state" / "orchestrator.md").write_text("# Orchestrator state: Demo Topic\n\n## Status: exploring weighting\n")
@@ -103,6 +109,7 @@ def test_docs(client):
     docs = client.get(f"/api/topics/{SLUG}/docs").json()
     assert [(d["group"], d["name"]) for d in docs] == [
         ("notes", "t-00000001.md"),
+        ("reports", REPORT),
         ("reports", "r1.md"),
         ("state", "focus-fx-00000001.md"),
         ("brief", "brief.md"),
@@ -161,3 +168,18 @@ def test_serves_static_app(client):
     assert client.get("/app.css").status_code == 200
     assert client.get("/api/topics").status_code == 200
     assert client.get("/api/nope").status_code == 404  # not index.html
+
+
+def test_report_citations_flag_changed_and_deleted(client):
+    docs = {d["name"]: d for d in client.get(f"/api/topics/{SLUG}/docs").json()}
+    assert docs[REPORT]["stale"] is True and docs["r1.md"]["stale"] is False and "stale" not in docs["t-00000001.md"]
+    d = client.get(f"/api/topics/{SLUG}/docs/reports/{REPORT}").json()
+    assert d["citations"] == {
+        "cited": 3,
+        "deleted": ["f-deadbeef"],
+        # f-22222222's citation fail (04:04) also came after the report.
+        "changed": [{"id": "f-89abcdef", "was": "refuted", "now": "verified, novel"}, {"id": "f-22222222", "was": "verified", "now": "refuted"}],
+        "stale": True,
+    }
+    assert 'data-status="verified"' in d["html"] and 'data-status="deleted"' in d["html"]
+    assert "citations" not in client.get(f"/api/topics/{SLUG}/docs/notes/t-00000001.md").json()

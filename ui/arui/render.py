@@ -20,13 +20,18 @@ class LinkContext:
     notes: set[str] = field(default_factory=set)  # task ids with notes/<id>.md
     focus: set[str] = field(default_factory=set)  # focus keys with state/focus-<key>.md
     papers: dict[str, str] = field(default_factory=dict)  # paperId -> title
+    status: dict[str, str] = field(default_factory=dict)  # finding id -> effective status, shown as a badge
 
 
 def id_html(m: str, ctx: LinkContext) -> str:
     if m.startswith("f-"):
         if m in ctx.findings:
-            return f'<a class="fid" data-finding="{m}" href="#{m}">{m}</a>'
-        return f'<span class="fid removed">{m}</span>'
+            st = ctx.status.get(m)
+            badge = f' data-status="{st}" title="{st}"' if st else ""
+            return f'<a class="fid{f" st-{st}" if st else ""}" data-finding="{m}" href="#{m}"{badge}>{m}</a>'
+        # Only badge deletions when statuses are known, i.e. in a topic's docs.
+        badge = ' data-status="deleted" title="deleted from the ledger"' if ctx.status else ""
+        return f'<span class="fid removed"{badge}>{m}</span>'
     if m.startswith("t-"):
         if m in ctx.notes:
             return f'<a class="tid" data-task="{m}" data-doc="notes/{m}.md" href="#{m}">{m}</a>'

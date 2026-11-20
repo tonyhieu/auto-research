@@ -24,6 +24,7 @@ const state = {
   view: null, // {type: "finding", id} | {type: "doc", group, name} | null
   detail: null, // fetched body for `view`
   preprints: {}, // slug -> GET /api/topics/{slug}/preprint; polled while running
+  regens: {}, // "slug/report name" -> GET .../reports/{name}/regenerate; polled while running
   open: new Set(), // sidebar <details> keys left open by the user
   seq: 0, // guards against out-of-order detail responses
   topicListSeq: 0, // same, for refetches of /api/topics
@@ -243,7 +244,8 @@ function renderSidebar() {
     const rows = ds
       .map((d) => {
         const on = v?.type === "doc" && v.group === g && v.name === d.name;
-        return `<a class="ar${on ? " on" : ""}" href="${docHash(g, d.name)}"><b>${esc(d.name.replace(/\.md$/, ""))}</b>${esc(day(new Date(d.mtime * 1000).toISOString()))}</a>`;
+        const stale = d.stale ? '<span class="st" title="Cites findings that changed since it was written">stale</span>' : "";
+        return `<a class="ar${on ? " on" : ""}" href="${docHash(g, d.name)}"><b>${esc(d.name.replace(/\.md$/, ""))}${stale}</b>${esc(day(new Date(d.mtime * 1000).toISOString()))}</a>`;
       })
       .join("");
     return details(`docs:${g}`, `${label} <small>${ds.length}</small>`, rows);
@@ -353,6 +355,44 @@ async function startPreprint() {
   if (slug === state.slug) renderFoot();
 }
 
+const regenUrl = (slug, name) => `/api/topics/${encodeURIComponent(slug)}/reports/${encodeURIComponent(name)}/regenerate`;
+const onReport = (slug, name) => slug === state.slug && state.view?.type === "doc" && state.view.group === "reports" && state.view.name === name;
+
+async function loadRegen(slug, name) {
+  let s;
+  try {
+    s = await api(regenUrl(slug, name));
+  } catch {
+    return; // the next poll retries
+  }
+  const key = `${slug}/${name}`;
+  const was = state.regens[key];
+  state.regens[key] = s;
+  if (was?.running && !s.running) {
+    // On success the rewritten report arrives as a docs change event, which reloads the open doc.
+    if (s.exitCode === 0) notify(slug, "complete", `Report regenerated: <code>${esc(name)}</code>`);
+    else notify(slug, "error", `Regenerating ${esc(name)} failed (exit ${esc(s.exitCode)}); see topics/.ui/${esc(slug)}-report-*.out`);
+  }
+  if (onReport(slug, name)) renderPane(true);
+}
+
+async function startRegen(name) {
+  const slug = state.slug;
+  const key = `${slug}/${name}`;
+  state.regens[key] = { running: true, exitCode: null };
+  renderPane(true);
+  const r = await post(regenUrl(slug, name), {});
+  if (r.ok) {
+    state.regens[key] = r.body;
+    notify(slug, "complete", `Regenerating <code>${esc(name)}</code> from the current ledger`);
+  } else {
+    state.regens[key] = { running: false, exitCode: null };
+    const d = r.body?.detail;
+    notify(slug, "error", `Regeneration not started: ${esc(typeof d === "string" ? d : (d?.error ?? `request failed (${r.status})`))}`);
+  }
+  if (onReport(slug, name)) renderPane(true);
+}
+
 function renderMain(error) {
   const t = state.topic;
   $("warn").innerHTML = error
@@ -421,9 +461,22 @@ function findingHtml(d) {
   }</div>`;
 }
 
+// Reports only: which cited findings were deleted or changed status since the report was written.
+function staleHtml(d) {
+  const c = d.citations;
+  if (!c?.stale) return "";
+  const id = (x) => `<code>${esc(x)}</code>`;
+  const parts = [
+    c.changed.length ? `${c.changed.length} changed: ${c.changed.map((x) => `${id(x.id)} ${esc(x.was)} &rarr; ${esc(x.now)}`).join(", ")}` : "",
+    c.deleted.length ? `${c.deleted.length} deleted: ${c.deleted.map(id).join(" ")}` : "",
+  ].filter(Boolean);
+  const running = state.regens[`${state.slug}/${d.name}`]?.running;
+  return `<div class="stale"><b>Stale.</b> Of ${c.cited} cited findings, ${parts.join("; ")}. Badges show the current status; the prose does not.<br><button class="btn2" data-act="regen" data-name="${esc(d.name)}"${running ? " disabled" : ""}>${running ? "Regenerating..." : "Regenerate from current ledger"}</button></div>`;
+}
+
 function docHtml(d) {
   const meta = state.docs.find((x) => x.group === d.group && x.name === d.name);
-  return `<header class="dh"><span class="did">${esc(d.name)}</span><div class="dm">${esc(d.group)}${meta ? ` &middot; updated ${minute(new Date(meta.mtime * 1000).toISOString())}` : ""}</div></header><div class="md" style="margin-top:14px">${d.html}</div>`;
+  return `<header class="dh"><span class="did">${esc(d.name)}</span><div class="dm">${esc(d.group)}${meta ? ` &middot; updated ${minute(new Date(meta.mtime * 1000).toISOString())}` : ""}</div>${staleHtml(d)}</header><div class="md" style="margin-top:14px">${d.html}</div>`;
 }
 
 const optsHtml = () =>
@@ -617,6 +670,8 @@ function action(el) {
       return stopRun();
     case "preprint":
       return startPreprint();
+    case "regen":
+      return startRegen(el.dataset.name);
     case "pick":
       state.mode = "focus";
       return setPicked(id, true);
@@ -709,6 +764,7 @@ window.addEventListener("hashchange", route);
 
 setInterval(() => {
   for (const [slug, s] of Object.entries(state.preprints)) if (s.running) loadPreprint(slug);
+  for (const [key, s] of Object.entries(state.regens)) if (s.running) loadRegen(...key.split(/\/(.*)/s));
 }, PREPRINT_POLL_MS);
 
 // EventSource reconnects on its own; refetch on reconnect so missed events do not matter.

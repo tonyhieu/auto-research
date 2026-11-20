@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from test_api import SLUG, jsonl, topics, v  # noqa: F401 (fixture)
+from test_api import REPORT, SLUG, jsonl, topics, v  # noqa: F401 (fixture)
 
 from arui import runs
 from arui.runs import REPO, compose_target, slugify
@@ -38,9 +38,9 @@ def stub(tmp_path_factory, monkeypatch):
 
 @pytest.fixture
 def app(topics, stub):  # noqa: F811
-    app = create_app(Store(topics), research=stub / "research", preprint=stub / "research")
+    app = create_app(Store(topics), research=stub / "research", preprint=stub / "research", regen=stub / "research")
     yield app
-    for p in [*app.state.launcher.procs.values(), *(p for p, _ in app.state.launcher.preprints.values())]:
+    for p in [*app.state.launcher.procs.values(), *(p for p, _ in app.state.launcher.preprints.values()), *app.state.launcher.regens.values()]:
         p.kill()
 
 
@@ -181,6 +181,17 @@ def test_local_safety(client, stub):
     assert client.post(url, json=body, headers={"Origin": "http://localhost:8765", "Host": "localhost:8765"}).status_code == 202
 
 
+def test_allowed_hosts_env(client, monkeypatch):
+    ts = "box.tail1234.ts.net"
+    headers = {"Host": f"{ts}:8765", "Origin": f"https://{ts}:8765"}
+    body = {"md": "x"}
+    assert client.post("/api/render", json=body, headers=headers).status_code == 403
+    monkeypatch.setenv("ARUI_ALLOWED_HOSTS", f" other.example , {ts}")
+    assert client.post("/api/render", json=body, headers=headers).status_code == 200
+    assert client.post("/api/render", json=body, headers={**headers, "Origin": "http://evil.example"}).status_code == 403
+    assert client.post("/api/render", json=body, headers={"Origin": "http://localhost:8765"}).status_code == 200, "localhost still allowed"
+
+
 def test_render_preview(client):
     r = client.post("/api/render", json={"md": "# Goals\n\n<b>x</b> | a |\n"})
     assert r.status_code == 200 and "<h1>Goals</h1>" in r.json()["html"] and "&lt;b&gt;" in r.json()["html"]
@@ -226,3 +237,18 @@ def test_preprint(client, stub, topics, monkeypatch):  # noqa: F811
     proc.kill()
     proc.wait()
     assert not client.get(f"/api/topics/{SLUG}/preprint").json()["running"]
+
+
+def test_regenerate_report(client, stub):
+    url = f"/api/topics/{SLUG}/reports/{REPORT}/regenerate"
+    assert client.get(url).json() == {"running": False, "exitCode": None}
+    assert client.post(f"/api/topics/{SLUG}/reports/r1.md/regenerate", json={}).status_code == 422, "not a window report"
+    assert client.post(f"/api/topics/{SLUG}/reports/nope.md/regenerate", json={}).status_code == 404
+    r = client.post(url, json={})
+    assert r.status_code == 202 and r.json()["running"]
+    assert call(stub)["args"] == ["-t", "Demo Topic", "-r", REPORT]
+    assert client.post(url, json={}).status_code == 409, "one regeneration per report at a time"
+    proc = client.app.state.launcher.regens[(SLUG, REPORT)]
+    proc.kill()
+    proc.wait()
+    assert not client.get(url).json()["running"]

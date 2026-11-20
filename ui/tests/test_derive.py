@@ -46,3 +46,19 @@ def test_latest_focus_and_heading():
     assert latest_focus(VERIFICATIONS + focused) is focused[1]
     assert orchestrator_heading("# Orchestrator state: X\n\n## Status: done\n## Map") == "Status: done"
     assert orchestrator_heading("# only a title\n") is None
+
+
+def test_citation_changes_compare_status_at_write_time():
+    from datetime import UTC, datetime
+
+    from arui.derive import citation_changes
+
+    by_id = {f.id: f for f in FINDINGS}
+    now = apply_verifications(FINDINGS, VERIFICATIONS)
+    text = " ".join([*by_id, "f-deadbeef", next(iter(by_id))])
+    later = citation_changes(text, datetime(2100, 1, 1, tzinfo=UTC), by_id, VERIFICATIONS, now)
+    assert later == {"cited": len(by_id) + 1, "deleted": ["f-deadbeef"], "changed": [], "stale": True}, "only the deletion"
+    early = citation_changes(text, datetime(2000, 1, 1, tzinfo=UTC), by_id, VERIFICATIONS, now)
+    moved = {fid for fid, e in now.items() if (e.status, e.novelty) != (by_id[fid].status, None)}
+    assert {c["id"] for c in early["changed"]} == moved and moved, "before any verdict, status is as written"
+    assert citation_changes("no ids", datetime(2000, 1, 1, tzinfo=UTC), by_id, VERIFICATIONS, now)["stale"] is False

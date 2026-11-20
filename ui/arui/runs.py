@@ -17,6 +17,7 @@ EVENT = TypeAdapter(RunEvent)
 REPO = Path(__file__).resolve().parents[2]
 RESEARCH = REPO / "bin" / "research"
 PREPRINT = REPO / "bin" / "preprint"
+REGEN = REPO / "bin" / "regen-report"
 PREPRINTS = REPO / "pre-prints"
 BRIEF_CAP = 12_000  # as in topic.ts
 SPAWN_GRACE_S = 2.0  # a child that exits this fast failed before its run log existed
@@ -135,8 +136,9 @@ class Launcher:
     """Spawns detached bin/research runs. The CLI's topic lock is the real guard; `procs` only covers a child's startup.
     Also spawns bin/preprint, which takes no lock, so `preprints` is its only guard."""
 
-    def __init__(self, root: Path, research: Path = RESEARCH, preprint: Path = PREPRINT):
-        self.root, self.research, self.preprint = root, research, preprint
+    def __init__(self, root: Path, research: Path = RESEARCH, preprint: Path = PREPRINT, regen: Path = REGEN):
+        self.root, self.research, self.preprint, self.regen = root, research, preprint, regen
+        self.regens: dict[tuple[str, str], subprocess.Popen] = {}  # (slug, report name) -> last bin/regen-report child
         self.procs: dict[str, subprocess.Popen] = {}  # slug -> last child spawned for it
         self.preprints: dict[str, tuple[subprocess.Popen, Path]] = {}  # slug -> last pre-print child and its output .md
         self.mutex = threading.Lock()  # check-then-spawn is atomic across request threads
@@ -187,6 +189,24 @@ class Launcher:
         proc, md = p
         code = proc.poll()
         return {"running": code is None, "exitCode": code, "path": str(md.relative_to(PREPRINTS.parent))}
+
+    def regen_busy(self, slug: str, name: str) -> bool:
+        p = self.regens.get((slug, name))
+        return p is not None and p.poll() is None
+
+    def spawn_regen(self, slug: str, title: str, name: str) -> tuple[subprocess.Popen, Path]:
+        """Start bin/regen-report (call under `mutex`, after `regen_busy`); like a pre-print, it takes no topic lock."""
+        ui = self.root / ".ui"
+        ui.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S-%f")
+        proc, out = self.popen([str(self.regen), "-t", title, "-r", name], ui / f"{slug}-report-{stamp}.out")
+        self.regens[(slug, name)] = proc
+        return proc, out
+
+    def regen_status(self, slug: str, name: str) -> dict:
+        p = self.regens.get((slug, name))
+        code = p.poll() if p else None
+        return {"running": p is not None and code is None, "exitCode": code}
 
     @staticmethod
     def popen(args: list[str], out: Path) -> tuple[subprocess.Popen, Path]:
