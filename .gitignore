@@ -224,6 +224,10 @@ topics/
 pre-prints/
 node_modules/
 
+# autonomous driver runtime state and human brief queue
+portfolio/
+briefs/queue/
+
 # research briefs (personal/project context)
 briefs/diversity-weighted-synthetic-data.md
 
@@ -231,3 +235,4 @@ briefs/diversity-weighted-synthetic-data.md
 front-end-drafts/
 bug-squash.*
 ui-spec.*
+driver-spec.*
