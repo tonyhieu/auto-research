@@ -29,6 +29,8 @@ import {
 	writePortfolio,
 	writeStatus,
 } from "./portfolio.ts";
+import { archiveBrief, nextQueuedBrief, QUEUE_DIR } from "./queue.ts";
+import { validateBrief } from "./brief.ts";
 import { ensureTopic, REPO_ROOT, slugify, type TopicPaths } from "./topic.ts";
 
 /** Launches the harness binaries; injectable so tests drive the loop without real runs. */
@@ -149,8 +151,19 @@ interface PortfolioOpts {
 	decide: Decider;
 	/** Topics root; injectable so tests do not touch the repo's topics/. */
 	topicsRoot?: string;
+	/** Human brief queue dir; injectable for tests. */
+	queueDir?: string;
 	sleep?: (ms: number) => Promise<void>;
 	log?: (line: string) => void;
+}
+
+/** Seed a topic from a validated brief and run its first breadth window. */
+async function startTopicFromBrief(p: Portfolio, topic: TopicPaths, brief: string, area: string, runner: Runner, cfg: DriverConfig): Promise<number> {
+	writeFileSync(topic.brief, brief.endsWith("\n") ? brief : `${brief}\n`);
+	const rec = topicRecord(p, topic.slug, topic.title, area);
+	const code = await runner.research(["-t", topic.title, "-n", String(cfg.windows)]);
+	finishRun(p, rec, { kind: "breadth", windows: cfg.windows }, [], topic, code, cfg);
+	return code;
 }
 
 /** Add any topics/<slug>/ not yet in the portfolio, so existing work is visible to the selector. */
@@ -182,6 +195,7 @@ function summarize(p: Portfolio, topicsRoot: string): string {
 export async function runPortfolio(opts: PortfolioOpts): Promise<void> {
 	const { root, runner, cfg, select, decide } = opts;
 	const topicsRoot = opts.topicsRoot ?? join(REPO_ROOT, "topics");
+	const queueDir = opts.queueDir ?? QUEUE_DIR;
 	const sleep = opts.sleep ?? sleepMs;
 	const log = opts.log ?? ((l: string) => console.log(l));
 	const now = () => new Date().toISOString();
@@ -200,6 +214,34 @@ export async function runPortfolio(opts: PortfolioOpts): Promise<void> {
 		seedExistingTopics(p, cfg, topicsRoot);
 		writePortfolio(root, p);
 		const existing = p.topics.map((t) => ({ slug: t.slug, title: t.title }));
+
+		// Human briefs take priority over the selector.
+		const queued = nextQueuedBrief(queueDir);
+		if (queued) {
+			const entry: Decision = { ts: now(), rationale: `human brief from queue: ${queued.title}`, select: { kind: "new-topic", title: queued.title, area: cfg.area, brief: "" } };
+			const v = validateBrief(queued.title, queued.brief, existing);
+			if (!v.ok) {
+				archiveBrief(queued.file, "rejected", v.error);
+				log(`[queue] rejected ${queued.title}: ${v.error}`);
+				appendDecision(root, { ...entry, outcome: { reason: `rejected: ${v.error}`, exitCode: 0 } });
+				last = entry;
+				continue;
+			}
+			const topic = ensureTopic(queued.title, topicsRoot);
+			status(`queue new-topic ${topic.slug}`, last);
+			log(`[queue] starting ${topic.slug}`);
+			const code = await startTopicFromBrief(p, topic, v.brief, cfg.area, runner, cfg);
+			writePortfolio(root, p);
+			archiveBrief(queued.file, "done");
+			entry.slug = topic.slug;
+			entry.action = { kind: "breadth", windows: cfg.windows };
+			entry.outcome = outcomeOf(p.topics.find((t) => t.slug === topic.slug)!, topic, code);
+			appendDecision(root, entry);
+			last = entry;
+			status(null, entry);
+			continue;
+		}
+
 		const { decision, rationale: why } = await select({ summary: summarize(p, topicsRoot), existing, cfg });
 		status(`${decision.kind}${decision.kind === "work" ? ` ${decision.slug}` : ""}`, last);
 		log(`[director] ${decision.kind}: ${why}`);
@@ -218,14 +260,11 @@ export async function runPortfolio(opts: PortfolioOpts): Promise<void> {
 		}
 		if (decision.kind === "new-topic") {
 			const topic = ensureTopic(decision.title, topicsRoot);
-			writeFileSync(topic.brief, decision.brief.endsWith("\n") ? decision.brief : `${decision.brief}\n`);
-			const rec = topicRecord(p, topic.slug, topic.title, decision.area);
-			const code = await runner.research(["-t", topic.title, "-n", String(cfg.windows)]);
-			finishRun(p, rec, { kind: "breadth", windows: cfg.windows }, [], topic, code, cfg);
+			const code = await startTopicFromBrief(p, topic, decision.brief, decision.area, runner, cfg);
 			writePortfolio(root, p);
 			entry.slug = topic.slug;
 			entry.action = { kind: "breadth", windows: cfg.windows };
-			entry.outcome = outcomeOf(rec, topic, code);
+			entry.outcome = outcomeOf(p.topics.find((t) => t.slug === topic.slug)!, topic, code);
 			appendDecision(root, entry);
 			last = entry;
 			status(null, entry);
