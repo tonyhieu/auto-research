@@ -36,8 +36,9 @@ export interface Portfolio {
 /** The heuristic decider's output; the loop knows the single phase-1 topic, so no topic field yet. */
 export type Action =
 	| { kind: "breadth"; windows: number }
-	| { kind: "focus"; findingId: string; windows: number }
+	| { kind: "focus"; findingId?: string; hypothesis?: string; windows: number }
 	| { kind: "preprint"; findingId: string }
+	| { kind: "retire"; reason: string }
 	| { kind: "idle"; minutes: number; reason: string }
 	| { kind: "stop"; reason: string };
 
@@ -169,7 +170,7 @@ export function applyOutcome(
 	const gained = o.vnAfter.some((id) => !o.vnBefore.includes(id));
 	if (o.action.kind === "focus") {
 		rec.consecutiveFocus++;
-		if (!rec.deepened.includes(o.action.findingId)) rec.deepened.push(o.action.findingId);
+		if (o.action.findingId && !rec.deepened.includes(o.action.findingId)) rec.deepened.push(o.action.findingId);
 	} else {
 		rec.consecutiveFocus = 0;
 	}
@@ -180,12 +181,14 @@ export function applyOutcome(
 	if (!pending && rec.consecutiveBarrenRuns >= cfg.barrenLimit) rec.status = "exhausted";
 }
 
-export function rationale(action: Action, rec: TopicRecord, vn: string[]): string {
+export function rationale(action: Action, vn: string[]): string {
 	switch (action.kind) {
 		case "preprint":
 			return `verified-novel ${action.findingId} was deepened; writing a pre-print`;
 		case "focus":
-			return `verified-novel ${action.findingId} not yet deepened; focus run to stress-test it`;
+			return action.findingId ? `verified-novel ${action.findingId} not yet deepened; focus run to stress-test it` : "focus run on a new hypothesis";
+		case "retire":
+			return action.reason;
 		case "breadth":
 			return vn.length ? "no undeepened verified-novel findings; another breadth window" : "no verified-novel findings yet; breadth exploration";
 		case "idle":

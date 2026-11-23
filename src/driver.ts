@@ -1,12 +1,16 @@
-// Autonomous research driver (phase 1): a heuristic loop that launches ./bin/research and
-// ./bin/preprint for one topic, reads each run's outcome, and records decisions. No LLM yet.
+// Autonomous research driver: a loop that launches ./bin/research and ./bin/preprint for one
+// topic, reads each run's outcome, and records decisions. The decider is injectable: a
+// heuristic (phase 1) or the LLM analyst (phase 2).
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { loadFindings } from "./ledger.ts";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { makeAnalyst } from "./analyst.ts";
+import { type Finding, loadFindings } from "./ledger.ts";
 import {
 	type Action,
+	applyOutcome,
 	appendDecision,
 	clearStop,
 	type Decision,
@@ -18,19 +22,33 @@ import {
 	rationale,
 	readPortfolio,
 	stopRequested,
+	type TopicRecord,
 	topicRecord,
 	verifiedNovelIds,
 	writePortfolio,
 	writeStatus,
 } from "./portfolio.ts";
-import { ensureTopic, REPO_ROOT, slugify } from "./topic.ts";
-import type { TopicPaths } from "./topic.ts";
+import { ensureTopic, REPO_ROOT, slugify, type TopicPaths } from "./topic.ts";
 
 /** Launches the harness binaries; injectable so tests drive the loop without real runs. */
 export interface Runner {
 	research(args: string[]): Promise<number>;
 	preprint(args: string[]): Promise<number>;
 }
+
+/** What a decider sees to choose the next action for a topic. */
+export interface DecideContext {
+	findings: Finding[];
+	rec: TopicRecord;
+	cfg: DriverConfig;
+	topic: TopicPaths;
+}
+export type Decider = (ctx: DecideContext) => Promise<{ action: Action; rationale: string }>;
+
+export const heuristicDecider: Decider = async ({ findings, rec, cfg }) => {
+	const action = decideNext({ findings, rec, cfg });
+	return { action, rationale: rationale(action, verifiedNovelIds(findings)) };
+};
 
 const spawnBin = (bin: string, args: string[]): Promise<number> =>
 	new Promise((resolve) => {
@@ -51,18 +69,21 @@ interface DriverOpts {
 	root: string;
 	runner: Runner;
 	cfg: DriverConfig;
+	decide?: Decider;
 	sleep?: (ms: number) => Promise<void>;
 	log?: (line: string) => void;
 }
 
 function execute(action: Action, topic: TopicPaths, runner: Runner, brief?: string): Promise<number> {
 	if (action.kind === "breadth") return runner.research(["-t", topic.title, "-n", String(action.windows), ...(brief ? ["-b", brief] : [])]);
-	if (action.kind === "focus") return runner.research(["-t", topic.title, "-n", String(action.windows), "-f", action.findingId]);
-	return runner.preprint(["-t", topic.title, "-f", (action as { findingId: string }).findingId]);
+	if (action.kind === "focus") return runner.research(["-t", topic.title, "-n", String(action.windows), "-f", action.findingId ?? action.hypothesis ?? ""]);
+	if (action.kind === "preprint") return runner.preprint(["-t", topic.title, "-f", action.findingId]);
+	throw new Error(`execute called with non-run action ${action.kind}`);
 }
 
 export async function runDriver(opts: DriverOpts): Promise<void> {
 	const { topic, root, runner, cfg } = opts;
+	const decide = opts.decide ?? heuristicDecider;
 	const sleep = opts.sleep ?? sleepMs;
 	const log = opts.log ?? ((l: string) => console.log(l));
 	const now = () => new Date().toISOString();
@@ -81,13 +102,17 @@ export async function runDriver(opts: DriverOpts): Promise<void> {
 		const findings = loadFindings(topic);
 		const p = readPortfolio(root);
 		const rec = topicRecord(p, topic.slug, topic.title, cfg.area);
-		const action = decideNext({ findings, rec, cfg });
-		const decision: Decision = { ts: now(), action, rationale: rationale(action, rec, verifiedNovelIds(findings)) };
+		const { action, rationale: why } = await decide({ findings, rec, cfg, topic });
+		const decision: Decision = { ts: now(), action, rationale: why };
 		status(action, last);
-		log(`[driver] ${action.kind}: ${decision.rationale}`);
+		log(`[driver] ${action.kind}: ${why}`);
 
-		if (action.kind === "stop") {
-			appendDecision(root, { ...decision, outcome: { reason: "stopped", exitCode: 0 } });
+		if (action.kind === "stop" || action.kind === "retire") {
+			if (action.kind === "retire") {
+				rec.status = "retired";
+				writePortfolio(root, p);
+			}
+			appendDecision(root, { ...decision, outcome: { reason: action.kind === "retire" ? "retired" : "stopped", exitCode: 0 } });
 			last = decision;
 			break;
 		}
@@ -101,10 +126,9 @@ export async function runDriver(opts: DriverOpts): Promise<void> {
 		const vnBefore = verifiedNovelIds(findings);
 		const code = await execute(action, topic, runner, cfg.brief);
 		const after = loadFindings(topic);
-		const vnAfter = verifiedNovelIds(after);
 		const end = lastRunEnd(topic.runs);
 		const reason = action.kind === "preprint" ? (code === 0 ? "complete" : "error") : (end?.reason ?? (code === 0 ? "complete" : "error"));
-		applyOutcomeInto(p, rec, action, vnBefore, vnAfter, reason, now(), cfg);
+		applyOutcome(rec, { action, vnBefore, vnAfter: verifiedNovelIds(after), reason, ts: now() }, cfg);
 		writePortfolio(root, p);
 		decision.outcome = { reason, exitCode: code, findings: after.length, verifiedNovel: rec.verifiedNovel };
 		appendDecision(root, decision);
@@ -114,20 +138,20 @@ export async function runDriver(opts: DriverOpts): Promise<void> {
 	status(null, last, false);
 }
 
-// Kept out of the loop body for readability; mutates the record in place via applyOutcome.
-import { applyOutcome } from "./portfolio.ts";
-import type { Portfolio, TopicRecord } from "./portfolio.ts";
-function applyOutcomeInto(_p: Portfolio, rec: TopicRecord, action: Action, vnBefore: string[], vnAfter: string[], reason: string, ts: string, cfg: DriverConfig): void {
-	applyOutcome(rec, { action, vnBefore, vnAfter, reason, ts }, cfg);
-}
-
-// Entry point: driver -t "Topic" [-b brief.md] [-a area]
+// Entry point: driver -t "Topic" [-b brief.md] [-a area] [--heuristic]
 if (import.meta.filename === process.argv[1] || process.argv[1]?.endsWith("driver.ts")) {
 	const envFile = join(REPO_ROOT, ".env");
 	if (existsSync(envFile)) process.loadEnvFile(envFile);
-	const { values } = parseArgs({ options: { topic: { type: "string", short: "t" }, brief: { type: "string", short: "b" }, area: { type: "string", short: "a" } } });
+	const { values } = parseArgs({
+		options: {
+			topic: { type: "string", short: "t" },
+			brief: { type: "string", short: "b" },
+			area: { type: "string", short: "a" },
+			heuristic: { type: "boolean", default: false },
+		},
+	});
 	if (!values.topic) {
-		console.error('usage: driver -t "Topic" [-b brief.md] [-a area]');
+		console.error('usage: driver -t "Topic" [-b brief.md] [-a area] [--heuristic]');
 		process.exit(2);
 	}
 	if (values.brief && !existsSync(values.brief)) {
@@ -141,6 +165,8 @@ if (import.meta.filename === process.argv[1] || process.argv[1]?.endsWith("drive
 	}
 	const topic = ensureTopic(values.topic);
 	const cfg: DriverConfig = { ...DEFAULT_CONFIG, ...(values.area ? { area: values.area } : {}), ...(values.brief ? { brief: values.brief } : {}) };
+	const log = (l: string) => console.log(l);
+	const decide = values.heuristic ? heuristicDecider : makeAnalyst(await ModelRuntime.create(), log);
 	for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
-	await runDriver({ topic, root: PORTFOLIO_DIR, runner: defaultRunner, cfg });
+	await runDriver({ topic, root: PORTFOLIO_DIR, runner: defaultRunner, cfg, decide, log });
 }
