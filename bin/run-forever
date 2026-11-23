@@ -1,0 +1,11 @@
+#!/bin/sh
+# Autonomous driver: run-forever -t "Topic" [-b brief.md] [-a area]  |  run-forever stop
+# `stop` asks a running driver to exit gracefully after its current run.
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ "$1" = "stop" ]; then
+	mkdir -p "$DIR/portfolio"
+	: > "$DIR/portfolio/STOP"
+	echo "stop requested; the driver exits after the current run"
+	exit 0
+fi
+exec caffeinate -i "$DIR/node_modules/.bin/tsx" "$DIR/src/driver.ts" "$@"
