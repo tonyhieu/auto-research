@@ -42,10 +42,21 @@ export type Action =
 	| { kind: "idle"; minutes: number; reason: string }
 	| { kind: "stop"; reason: string };
 
+/** Portfolio-level roaming choice, above the per-topic Action. */
+export type SelectDecision =
+	| { kind: "work"; slug: string }
+	| { kind: "new-topic"; title: string; area: string; brief: string }
+	| { kind: "idle"; minutes: number; reason: string }
+	| { kind: "stop"; reason: string };
+
 export interface Decision {
 	ts: string;
-	action: Action;
 	rationale: string;
+	/** The topic-scoped action taken; absent for a pure selection such as idle or stop. */
+	action?: Action;
+	/** The portfolio-level selection, when the driver roams across topics. */
+	select?: SelectDecision;
+	slug?: string;
 	outcome?: { reason: string; exitCode: number; findings?: number; verifiedNovel?: number };
 }
 
@@ -55,6 +66,8 @@ export interface DriverStatus {
 	startedAt: string;
 	heartbeatAt: string;
 	currentAction?: Action | null;
+	/** Short human label for the current cycle (used by the roaming loop). */
+	label?: string;
 	lastDecision?: Decision;
 }
 

@@ -6,19 +6,19 @@ import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { runAgent } from "./agent.ts";
 import type { Finding } from "./ledger.ts";
-import { type Action, type DriverConfig, verifiedNovelIds } from "./portfolio.ts";
+import { type Action, type DriverConfig, type SelectDecision, verifiedNovelIds } from "./portfolio.ts";
 import type { TopicRecord } from "./portfolio.ts";
 import { parseReportName } from "./reports.ts";
+import { validateBrief } from "./brief.ts";
 import { ledgerTools } from "./tools.ts";
 import type { Decider } from "./driver.ts";
-import type { TopicPaths } from "./topic.ts";
+import { REPO_ROOT, type TopicPaths } from "./topic.ts";
 
 const HYPOTHESIS_CAP = 1000;
 
-/** The last JSON object carrying an `action` key in the model's reply. */
-export function parseAction(text: string): unknown {
+/** The last brace-balanced JSON object carrying `key`, scanning the reply fences or not. */
+function lastJsonObject(text: string, key: string): Record<string, unknown> | undefined {
 	const objects: string[] = [];
-	// Walk brace-balanced spans so a JSON block anywhere in the reply is found, fences or not.
 	for (let i = 0; i < text.length; i++) {
 		if (text[i] !== "{") continue;
 		let depth = 0;
@@ -34,13 +34,16 @@ export function parseAction(text: string): unknown {
 	for (const s of objects.reverse()) {
 		try {
 			const o = JSON.parse(s);
-			if (o && typeof o === "object" && "action" in o) return o;
+			if (o && typeof o === "object" && key in o) return o as Record<string, unknown>;
 		} catch {
 			// not JSON; keep scanning
 		}
 	}
 	return undefined;
 }
+
+export const parseAction = (text: string): Record<string, unknown> | undefined => lastJsonObject(text, "action");
+export const parseSelect = (text: string): Record<string, unknown> | undefined => lastJsonObject(text, "decision");
 
 type Valid = { ok: true; action: Action; rationale: string } | { ok: false; error: string };
 
@@ -83,6 +86,89 @@ export function validateAction(raw: unknown, ctx: { findings: Finding[]; cfg: Dr
 		default:
 			return { ok: false, error: `unknown action kind ${JSON.stringify(a.kind)}` };
 	}
+}
+
+// Portfolio-level roaming: pick which topic to advance, or propose a new one.
+export interface SelectContext {
+	summary: string;
+	existing: { slug: string; title: string }[];
+	cfg: DriverConfig;
+}
+export type Selector = (ctx: SelectContext) => Promise<{ decision: SelectDecision; rationale: string }>;
+
+type SelectValid = { ok: true; decision: SelectDecision; rationale: string } | { ok: false; error: string };
+
+export function validateSelect(raw: Record<string, unknown> | undefined, ctx: { existing: { slug: string; title: string }[]; cfg: DriverConfig }): SelectValid {
+	if (!raw) return { ok: false, error: "no JSON decision object found" };
+	const d = raw.decision as Record<string, unknown> | undefined;
+	if (!d || typeof d !== "object") return { ok: false, error: "missing decision object" };
+	const rationale = typeof raw.rationale === "string" ? raw.rationale : "";
+	switch (d.kind) {
+		case "work": {
+			const slug = typeof d.slug === "string" ? d.slug : "";
+			if (!ctx.existing.some((t) => t.slug === slug)) return { ok: false, error: `work slug ${slug || "(missing)"} is not an existing topic` };
+			return { ok: true, decision: { kind: "work", slug }, rationale };
+		}
+		case "new-topic": {
+			const title = typeof d.title === "string" ? d.title : "";
+			const area = typeof d.area === "string" && d.area.trim() ? d.area.trim() : "default";
+			const v = validateBrief(title, typeof d.brief === "string" ? d.brief : "", ctx.existing);
+			if (!v.ok) return { ok: false, error: v.error };
+			return { ok: true, decision: { kind: "new-topic", title: title.trim(), area, brief: v.brief }, rationale };
+		}
+		case "idle": {
+			const minutes = Number.isInteger(d.minutes) && (d.minutes as number) >= 1 ? Math.min(d.minutes as number, 240) : ctx.cfg.idleMinutes;
+			return { ok: true, decision: { kind: "idle", minutes, reason: typeof d.reason === "string" ? d.reason : "selector idle" }, rationale };
+		}
+		case "stop":
+			return { ok: true, decision: { kind: "stop", reason: typeof d.reason === "string" ? d.reason : "selector stop" }, rationale };
+		default:
+			return { ok: false, error: `unknown decision kind ${JSON.stringify(d.kind)}` };
+	}
+}
+
+function selectSystem(): string {
+	return `You are the RESEARCH DIRECTOR choosing what an autonomous harness works on next across a portfolio of topics.
+
+Strategy: deepen-then-roam. Keep advancing a topic (breadth, focus, pre-print) while it still has a worthwhile next step. Open a sibling topic in the same area when the current one is exhausted but the area is not. Only propose a wholly new area once the current area is mined out.
+
+Hard constraint: the CPU sandbox has numpy/scipy/sympy/scikit-learn (no torch) and only two datasets, 20 Newsgroups and UCI Covertype. Every topic, new or old, must be answerable with those or pure simulation. A new topic's brief has its constraints section replaced by the canonical one automatically; write the question, prior work, and method, and keep the data within these limits.
+
+Decisions (choose exactly one):
+- work: advance an existing topic (give its slug); the per-topic analyst then picks the exact action.
+- new-topic: propose a topic with a title, an area, and a brief (question, prior work, method).
+- idle: nothing worth running now; wait.
+- stop: shut the driver down.
+
+Reply with exactly one JSON object and nothing else:
+{"decision": {"kind": "...", ...fields}, "rationale": "one sentence"}`;
+}
+
+const selectPrompt = (summary: string): string =>
+	`Portfolio (areas, topics, status, verified-novel counts):
+${summary}
+
+New topics only after the current area is exhausted; at most modest branching. Keep every topic inside the sandbox limits. Decide the single next move and reply with the JSON object.`;
+
+export function makeSelector(models: ModelRuntime, log: (line: string) => void = () => {}): Selector {
+	return async ({ summary, existing, cfg }) => {
+		const cwd = join(REPO_ROOT, "topics");
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const prompt = attempt === 0 ? selectPrompt(summary) : `${selectPrompt(summary)}\n\nYour previous reply was not a single valid JSON decision. Reply with exactly one JSON object and nothing else.`;
+			let text = "";
+			try {
+				const r = await runAgent({ name: "selector", cwd, systemPrompt: selectSystem(), prompt, builtinTools: ["read", "ls"], tools: [], models, log });
+				text = r.text;
+				if (r.interrupted) log(`[selector] interrupted: ${r.interrupted}`);
+			} catch (e) {
+				log(`[selector] error: ${(e as Error).message}`);
+			}
+			const v = validateSelect(parseSelect(text), { existing, cfg });
+			if (v.ok) return { decision: v.decision, rationale: v.rationale };
+			log(`[selector] invalid decision: ${v.error}`);
+		}
+		return { decision: { kind: "idle", minutes: cfg.idleMinutes, reason: "selector produced no valid decision" }, rationale: "fallback after invalid selector output" };
+	};
 }
 
 function latestReport(topic: TopicPaths): string {

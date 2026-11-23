@@ -2,11 +2,11 @@
 // topic, reads each run's outcome, and records decisions. The decider is injectable: a
 // heuristic (phase 1) or the LLM analyst (phase 2).
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { makeAnalyst } from "./analyst.ts";
+import { makeAnalyst, makeSelector, type Selector } from "./analyst.ts";
 import { type Finding, loadFindings } from "./ledger.ts";
 import {
 	type Action,
@@ -18,6 +18,7 @@ import {
 	type DriverConfig,
 	decideNext,
 	lastRunEnd,
+	type Portfolio,
 	PORTFOLIO_DIR,
 	rationale,
 	readPortfolio,
@@ -138,7 +139,146 @@ export async function runDriver(opts: DriverOpts): Promise<void> {
 	status(null, last, false);
 }
 
-// Entry point: driver -t "Topic" [-b brief.md] [-a area] [--heuristic]
+// --- Portfolio (roaming) loop: a selector picks the topic or a new one; the per-topic analyst picks the action. ---
+
+interface PortfolioOpts {
+	root: string;
+	runner: Runner;
+	cfg: DriverConfig;
+	select: Selector;
+	decide: Decider;
+	/** Topics root; injectable so tests do not touch the repo's topics/. */
+	topicsRoot?: string;
+	sleep?: (ms: number) => Promise<void>;
+	log?: (line: string) => void;
+}
+
+/** Add any topics/<slug>/ not yet in the portfolio, so existing work is visible to the selector. */
+function seedExistingTopics(p: Portfolio, cfg: DriverConfig, dir: string): void {
+	if (!existsSync(dir)) return;
+	for (const slug of readdirSync(dir)) {
+		const meta = join(dir, slug, "topic.json");
+		if (p.topics.some((t) => t.slug === slug) || !existsSync(meta)) continue;
+		try {
+			const title = JSON.parse(readFileSync(meta, "utf8")).title ?? slug;
+			topicRecord(p, slug, title, cfg.area);
+		} catch {
+			// skip an unreadable topic.json
+		}
+	}
+}
+
+function summarize(p: Portfolio, topicsRoot: string): string {
+	if (!p.topics.length) return "(empty portfolio; propose a first topic)";
+	return p.topics
+		.map((t) => {
+			const f = loadFindings(ensureTopic(t.title, topicsRoot));
+			const vn = verifiedNovelIds(f).length;
+			return `- ${t.slug} [area ${t.area}, ${t.status}] runs=${t.runs} findings=${f.length} verified-novel=${vn} deepened=${t.deepened.length} preprinted=${t.preprinted.length}`;
+		})
+		.join("\n");
+}
+
+export async function runPortfolio(opts: PortfolioOpts): Promise<void> {
+	const { root, runner, cfg, select, decide } = opts;
+	const topicsRoot = opts.topicsRoot ?? join(REPO_ROOT, "topics");
+	const sleep = opts.sleep ?? sleepMs;
+	const log = opts.log ?? ((l: string) => console.log(l));
+	const now = () => new Date().toISOString();
+	const started = now();
+	clearStop(root);
+	const status = (label: string | null, lastDecision?: Decision, running = true) =>
+		writeStatus(root, { running, pid: process.pid, startedAt: started, heartbeatAt: now(), currentAction: null, label: label ?? undefined, lastDecision });
+	status(null);
+
+	let cycle = 0;
+	let last: Decision | undefined;
+	while (!stopRequested(root)) {
+		if (cfg.maxCycles !== undefined && cycle >= cfg.maxCycles) break;
+		cycle++;
+		const p = readPortfolio(root);
+		seedExistingTopics(p, cfg, topicsRoot);
+		writePortfolio(root, p);
+		const existing = p.topics.map((t) => ({ slug: t.slug, title: t.title }));
+		const { decision, rationale: why } = await select({ summary: summarize(p, topicsRoot), existing, cfg });
+		status(`${decision.kind}${decision.kind === "work" ? ` ${decision.slug}` : ""}`, last);
+		log(`[director] ${decision.kind}: ${why}`);
+		const entry: Decision = { ts: now(), rationale: why, select: decision };
+
+		if (decision.kind === "stop") {
+			appendDecision(root, { ...entry, outcome: { reason: "stopped", exitCode: 0 } });
+			last = entry;
+			break;
+		}
+		if (decision.kind === "idle") {
+			appendDecision(root, entry);
+			last = entry;
+			await sleep(decision.minutes * 60_000);
+			continue;
+		}
+		if (decision.kind === "new-topic") {
+			const topic = ensureTopic(decision.title, topicsRoot);
+			writeFileSync(topic.brief, decision.brief.endsWith("\n") ? decision.brief : `${decision.brief}\n`);
+			const rec = topicRecord(p, topic.slug, topic.title, decision.area);
+			const code = await runner.research(["-t", topic.title, "-n", String(cfg.windows)]);
+			finishRun(p, rec, { kind: "breadth", windows: cfg.windows }, [], topic, code, cfg);
+			writePortfolio(root, p);
+			entry.slug = topic.slug;
+			entry.action = { kind: "breadth", windows: cfg.windows };
+			entry.outcome = outcomeOf(rec, topic, code);
+			appendDecision(root, entry);
+			last = entry;
+			status(null, entry);
+			continue;
+		}
+		// work: delegate the exact action to the per-topic analyst.
+		const rec = p.topics.find((t) => t.slug === decision.slug)!;
+		const topic = ensureTopic(rec.title, topicsRoot);
+		const { action, rationale: why2 } = await decide({ findings: loadFindings(topic), rec, cfg, topic });
+		entry.slug = topic.slug;
+		entry.action = action;
+		entry.rationale = `${why}; ${why2}`;
+		log(`[analyst] ${action.kind}: ${why2}`);
+		if (action.kind === "retire") {
+			rec.status = "retired";
+			writePortfolio(root, p);
+			appendDecision(root, { ...entry, outcome: { reason: "retired", exitCode: 0 } });
+			last = entry;
+			status(null, entry);
+			continue;
+		}
+		if (action.kind === "idle" || action.kind === "stop") {
+			appendDecision(root, entry);
+			last = entry;
+			if (action.kind === "idle") await sleep(action.minutes * 60_000);
+			else break;
+			continue;
+		}
+		const vnBefore = verifiedNovelIds(loadFindings(topic));
+		const code = await execute(action, topic, runner, cfg.brief);
+		finishRun(p, rec, action, vnBefore, topic, code, cfg);
+		writePortfolio(root, p);
+		entry.outcome = outcomeOf(rec, topic, code);
+		appendDecision(root, entry);
+		last = entry;
+		status(null, entry);
+	}
+	status(null, last, false);
+}
+
+function finishRun(_p: Portfolio, rec: TopicRecord, action: Action, vnBefore: string[], topic: TopicPaths, code: number, cfg: DriverConfig): void {
+	const after = loadFindings(topic);
+	const end = lastRunEnd(topic.runs);
+	const reason = action.kind === "preprint" ? (code === 0 ? "complete" : "error") : (end?.reason ?? (code === 0 ? "complete" : "error"));
+	applyOutcome(rec, { action, vnBefore, vnAfter: verifiedNovelIds(after), reason, ts: new Date().toISOString() }, cfg);
+}
+
+function outcomeOf(rec: TopicRecord, topic: TopicPaths, code: number): Decision["outcome"] {
+	const after = loadFindings(topic);
+	return { reason: rec.lastReason ?? (code === 0 ? "complete" : "error"), exitCode: code, findings: after.length, verifiedNovel: rec.verifiedNovel };
+}
+
+// Entry point: driver -t "Topic" [-b brief.md] [-a area] [--heuristic]  |  driver (roam across the portfolio)
 if (import.meta.filename === process.argv[1] || process.argv[1]?.endsWith("driver.ts")) {
 	const envFile = join(REPO_ROOT, ".env");
 	if (existsSync(envFile)) process.loadEnvFile(envFile);
@@ -150,9 +290,13 @@ if (import.meta.filename === process.argv[1] || process.argv[1]?.endsWith("drive
 			heuristic: { type: "boolean", default: false },
 		},
 	});
+	const log = (l: string) => console.log(l);
+	for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
+	// No -t: roam the whole portfolio (the autonomous default).
 	if (!values.topic) {
-		console.error('usage: driver -t "Topic" [-b brief.md] [-a area] [--heuristic]');
-		process.exit(2);
+		const models = await ModelRuntime.create();
+		await runPortfolio({ root: PORTFOLIO_DIR, runner: defaultRunner, cfg: DEFAULT_CONFIG, select: makeSelector(models, log), decide: makeAnalyst(models, log), log });
+		process.exit(0);
 	}
 	if (values.brief && !existsSync(values.brief)) {
 		console.error(`brief not found: ${values.brief}`);
@@ -165,8 +309,6 @@ if (import.meta.filename === process.argv[1] || process.argv[1]?.endsWith("drive
 	}
 	const topic = ensureTopic(values.topic);
 	const cfg: DriverConfig = { ...DEFAULT_CONFIG, ...(values.area ? { area: values.area } : {}), ...(values.brief ? { brief: values.brief } : {}) };
-	const log = (l: string) => console.log(l);
 	const decide = values.heuristic ? heuristicDecider : makeAnalyst(await ModelRuntime.create(), log);
-	for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => process.exit(130));
 	await runDriver({ topic, root: PORTFOLIO_DIR, runner: defaultRunner, cfg, decide, log });
 }
