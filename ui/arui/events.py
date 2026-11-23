@@ -38,6 +38,13 @@ def classify(root: Path, path: str) -> tuple[str, str | None] | None:
     return (slug, part) if part else None
 
 
+def under(base: Path, path: str) -> bool:
+    try:
+        Path(path).resolve().relative_to(base)
+        return True
+    except ValueError:
+        return False
+
 def line_count(path: Path) -> int:
     try:
         with path.open() as f:
@@ -47,8 +54,9 @@ def line_count(path: Path) -> int:
 
 
 class Events:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, portfolio: Path | None = None):
         self.root = root.resolve()
+        self.portfolio = portfolio.resolve() if portfolio else None
         self.clients: set[asyncio.Queue] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.seen: dict[str, int] = {}  # slug -> valid runs.jsonl events already handled
@@ -74,6 +82,8 @@ class Events:
 
     def handle(self, paths: set[str]) -> None:
         parts: dict[str, set[str]] = {}
+        if self.portfolio and any(under(self.portfolio, p) for p in paths):
+            self.publish("driver-changed", {})
         for p in paths:
             c = classify(self.root, p)
             if c:
@@ -130,8 +140,15 @@ class Events:
         self.root.mkdir(parents=True, exist_ok=True)
         self.prime()
         poll = asyncio.create_task(self.poll_lost())
+        roots = [self.root]
+        if self.portfolio:
+            self.portfolio.mkdir(parents=True, exist_ok=True)
+            roots.append(self.portfolio)
+        def watched(_change, p: str) -> bool:
+            return classify(self.root, p) is not None or (self.portfolio is not None and under(self.portfolio, p))
+
         try:
-            async for changes in awatch(self.root, watch_filter=lambda _c, p: classify(self.root, p) is not None, debounce=DEBOUNCE_MS, stop_event=stop):
+            async for changes in awatch(*roots, watch_filter=watched, debounce=DEBOUNCE_MS, stop_event=stop):
                 self.handle({p for _, p in changes})
         finally:
             poll.cancel()

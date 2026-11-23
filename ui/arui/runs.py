@@ -1,5 +1,6 @@
 """Run status from the topic lock and state/runs.jsonl, plus spawning and stopping bin/research."""
 
+import json
 import os
 import re
 import signal
@@ -18,6 +19,8 @@ REPO = Path(__file__).resolve().parents[2]
 RESEARCH = REPO / "bin" / "research"
 PREPRINT = REPO / "bin" / "preprint"
 REGEN = REPO / "bin" / "regen-report"
+RUN_FOREVER = REPO / "bin" / "run-forever"
+PORTFOLIO = REPO / "portfolio"
 PREPRINTS = REPO / "pre-prints"
 BRIEF_CAP = 12_000  # as in topic.ts
 SPAWN_GRACE_S = 2.0  # a child that exits this fast failed before its run log existed
@@ -34,6 +37,45 @@ def pid_alive(pid: int) -> bool:
         return True
     except (ProcessLookupError, OverflowError, ValueError):
         return False
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _tail_jsonl(path: Path, n: int) -> list[dict]:
+    try:
+        lines = [line for line in path.read_text().splitlines() if line.strip()]
+    except OSError:
+        return []
+    out = []
+    for line in lines[-n:]:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out[::-1]  # newest first
+
+
+def driver_state(portfolio: Path = PORTFOLIO) -> dict:
+    """The autonomous driver's live status, its topic portfolio, and the recent decision log."""
+    status = _read_json(portfolio / "driver.json") or {}
+    pid = status.get("pid")
+    running = bool(status.get("running")) and isinstance(pid, int) and pid_alive(pid)
+    port = _read_json(portfolio / "portfolio.json") or {"topics": []}
+    return {
+        "running": running,
+        "pid": pid if running else None,
+        "startedAt": status.get("startedAt"),
+        "heartbeatAt": status.get("heartbeatAt"),
+        "label": status.get("label"),
+        "lastDecision": status.get("lastDecision"),
+        "topics": port.get("topics", []),
+        "decisions": _tail_jsonl(portfolio / "decisions.jsonl", 30),
+    }
 
 
 def lock_pid(topic: Path) -> int | None:
@@ -136,8 +178,10 @@ class Launcher:
     """Spawns detached bin/research runs. The CLI's topic lock is the real guard; `procs` only covers a child's startup.
     Also spawns bin/preprint, which takes no lock, so `preprints` is its only guard."""
 
-    def __init__(self, root: Path, research: Path = RESEARCH, preprint: Path = PREPRINT, regen: Path = REGEN):
+    def __init__(self, root: Path, research: Path = RESEARCH, preprint: Path = PREPRINT, regen: Path = REGEN, run_forever: Path = RUN_FOREVER, portfolio: Path = PORTFOLIO):
         self.root, self.research, self.preprint, self.regen = root, research, preprint, regen
+        self.run_forever, self.portfolio = run_forever, portfolio
+        self.driver: subprocess.Popen | None = None  # last run-forever child this server spawned
         self.regens: dict[tuple[str, str], subprocess.Popen] = {}  # (slug, report name) -> last bin/regen-report child
         self.procs: dict[str, subprocess.Popen] = {}  # slug -> last child spawned for it
         self.preprints: dict[str, tuple[subprocess.Popen, Path]] = {}  # slug -> last pre-print child and its output .md
@@ -165,6 +209,25 @@ class Launcher:
         proc, out = self.popen(args, ui / f"{slug}-{stamp}.out")
         self.procs[slug] = proc
         return proc, out
+
+    def driver_busy(self) -> bool:
+        """The driver is running (driver.json pid alive) or our child has not exited yet."""
+        return driver_state(self.portfolio)["running"] or (self.driver is not None and self.driver.poll() is None)
+
+    def spawn_driver(self) -> tuple[subprocess.Popen, Path]:
+        """Start bin/run-forever in roam mode (call under `mutex`, after `driver_busy`)."""
+        ui = self.root / ".ui"
+        ui.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S-%f")
+        proc, out = self.popen([str(self.run_forever)], ui / f"driver-{stamp}.out")
+        self.driver = proc
+        return proc, out
+
+    def stop_driver(self) -> bool:
+        """Ask the driver to exit after its current run by dropping the STOP flag; returns whether it is still running."""
+        self.portfolio.mkdir(parents=True, exist_ok=True)
+        (self.portfolio / "STOP").write_text("")
+        return driver_state(self.portfolio)["running"]
 
     def preprint_busy(self, slug: str) -> bool:
         p = self.preprints.get(slug)

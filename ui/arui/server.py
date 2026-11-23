@@ -148,9 +148,9 @@ def finding_detail(t: Topic, fid: str) -> dict:
     }
 
 
-def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = runs.PREPRINT, regen: Path = runs.REGEN) -> FastAPI:
-    events = Events(store.root)
-    launcher = runs.Launcher(store.root, research, preprint, regen)
+def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = runs.PREPRINT, regen: Path = runs.REGEN, run_forever: Path = runs.RUN_FOREVER, portfolio: Path = runs.PORTFOLIO) -> FastAPI:
+    events = Events(store.root, portfolio)
+    launcher = runs.Launcher(store.root, research, preprint, regen, run_forever, portfolio)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -301,6 +301,23 @@ def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = ru
             spawned = launcher.spawn_regen(slug, t.title, name)
         pid = settle_or_500(*spawned)
         return {**launcher.regen_status(slug, name), "pid": pid}
+
+    @app.get("/api/driver")
+    def driver_status():
+        return runs.driver_state(launcher.portfolio)
+
+    @app.post("/api/driver/start", status_code=202, dependencies=[Depends(local_json)])
+    def driver_start():
+        """Launch the autonomous driver (roam mode); the portfolio STOP flag or this server's stop ends it."""
+        with launcher.mutex:
+            if launcher.driver_busy():
+                raise HTTPException(409, "the driver is already running")
+            spawned = launcher.spawn_driver()
+        return {"running": True, "pid": settle_or_500(*spawned)}
+
+    @app.post("/api/driver/stop", status_code=202, dependencies=[Depends(local_json)])
+    def driver_stop():
+        return {"running": launcher.stop_driver()}
 
     @app.post("/api/render", dependencies=[Depends(local_json)])
     def render_md(body: RenderRequest):

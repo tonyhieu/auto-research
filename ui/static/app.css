@@ -175,4 +175,12 @@ a.fid.st-verified::after{color:var(--ok)}a.fid.st-refuted::after{color:var(--bad
 .stale{margin-top:12px;padding:8px 10px;border:1px solid var(--warn);border-radius:8px;font-size:12px}
 .stale .btn2{margin-top:6px;padding:3px 10px;font-size:12px}
 .ar .st{color:var(--warn);font-size:10px;margin-left:4px}
+/* Autonomous driver panel (sidebar). */
+.driver{border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:10px;font-size:12px}
+.driver:empty{display:none}
+.driver .dh{display:flex;justify-content:space-between;align-items:center;font-weight:600}
+.driver .dlabel{color:var(--muted);margin:4px 0}
+.driver .feed .dec{padding:4px 0;border-top:1px solid var(--line)}
+.driver .feed .dec small{display:block;color:var(--muted)}
+.driver .dot{margin-left:6px}
 a.paper{color:var(--accent)}

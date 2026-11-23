@@ -38,9 +38,10 @@ def stub(tmp_path_factory, monkeypatch):
 
 @pytest.fixture
 def app(topics, stub):  # noqa: F811
-    app = create_app(Store(topics), research=stub / "research", preprint=stub / "research", regen=stub / "research")
+    app = create_app(Store(topics), research=stub / "research", preprint=stub / "research", regen=stub / "research", run_forever=stub / "research", portfolio=topics.parent / "portfolio")
     yield app
-    for p in [*app.state.launcher.procs.values(), *(p for p, _ in app.state.launcher.preprints.values()), *app.state.launcher.regens.values()]:
+    driver = [app.state.launcher.driver] if app.state.launcher.driver else []
+    for p in [*app.state.launcher.procs.values(), *(p for p, _ in app.state.launcher.preprints.values()), *app.state.launcher.regens.values(), *driver]:
         p.kill()
 
 
@@ -237,6 +238,20 @@ def test_preprint(client, stub, topics, monkeypatch):  # noqa: F811
     proc.kill()
     proc.wait()
     assert not client.get(f"/api/topics/{SLUG}/preprint").json()["running"]
+
+
+def test_driver_start_stop_status(client, stub):
+    port = client.app.state.launcher.portfolio
+    assert client.get("/api/driver").json()["running"] is False
+    r = client.post("/api/driver/start", json={})
+    assert r.status_code == 202 and r.json()["running"]
+    assert call(stub)["args"] == [], "run-forever is launched in roam mode with no args"
+    assert client.post("/api/driver/start", json={}).status_code == 409, "one driver at a time"
+    assert client.post("/api/driver/stop", json={}).status_code == 202
+    assert (port / "STOP").exists(), "stop drops the graceful STOP flag"
+    proc = client.app.state.launcher.driver
+    proc.kill()
+    proc.wait()
 
 
 def test_regenerate_report(client, stub):

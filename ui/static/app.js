@@ -25,6 +25,7 @@ const state = {
   detail: null, // fetched body for `view`
   preprints: {}, // slug -> GET /api/topics/{slug}/preprint; polled while running
   regens: {}, // "slug/report name" -> GET .../reports/{name}/regenerate; polled while running
+  driver: null, // GET /api/driver: the autonomous driver's status, portfolio, and recent decisions
   open: new Set(), // sidebar <details> keys left open by the user
   seq: 0, // guards against out-of-order detail responses
   topicListSeq: 0, // same, for refetches of /api/topics
@@ -672,6 +673,10 @@ function action(el) {
       return startPreprint();
     case "regen":
       return startRegen(el.dataset.name);
+    case "driver-start":
+      return startDriver();
+    case "driver-stop":
+      return stopDriver();
     case "pick":
       state.mode = "focus";
       return setPicked(id, true);
@@ -699,7 +704,48 @@ function action(el) {
   }
 }
 
+// The autonomous driver panel in the sidebar: running state, a start/stop control, and a decision feed.
+function renderDriver() {
+  const d = state.driver;
+  if (!d) return void ($("driver").innerHTML = "");
+  const dot = d.running ? '<span class="dot" title="running"></span>' : "";
+  const btn = d.running ? '<button class="btn2" data-act="driver-stop">Stop</button>' : '<button class="btn2" data-act="driver-start">Start</button>';
+  const feed =
+    (d.decisions || [])
+      .slice(0, 6)
+      .map((x) => {
+        const kind = x.select?.kind ?? x.action?.kind ?? "?";
+        const slug = x.slug ? ` <code>${esc(x.slug)}</code>` : "";
+        const vn = x.outcome && x.outcome.verifiedNovel != null ? ` &middot; vn ${esc(x.outcome.verifiedNovel)}` : "";
+        const out = x.outcome ? ` &middot; ${esc(x.outcome.reason)}${vn}` : "";
+        return `<div class="dec"><b>${esc(kind)}</b>${slug}${out}<small>${esc(x.rationale || "")}</small></div>`;
+      })
+      .join("") || '<div class="none">no decisions yet</div>';
+  $("driver").innerHTML = `<div class="dh"><span>Driver${dot}</span>${btn}</div><div class="dlabel">${d.running ? esc(d.label || "working") : "idle"}</div><div class="feed">${feed}</div>`;
+}
+
+async function loadDriver() {
+  try {
+    state.driver = await api("/api/driver");
+  } catch {
+    return; // the next SSE or poll retries
+  }
+  renderDriver();
+}
+
+async function startDriver() {
+  const r = await post("/api/driver/start", {});
+  if (!r.ok) notify("", "error", `Driver not started: ${esc(r.body?.detail ?? `request failed (${r.status})`)}`);
+  loadDriver();
+}
+async function stopDriver() {
+  await post("/api/driver/stop", {});
+  notify("", "complete", "Driver will stop after the current run");
+  loadDriver();
+}
+
 function renderAll(error) {
+  renderDriver();
   renderSidebar();
   renderStrip();
   renderMain(error);
@@ -765,6 +811,7 @@ window.addEventListener("hashchange", route);
 setInterval(() => {
   for (const [slug, s] of Object.entries(state.preprints)) if (s.running) loadPreprint(slug);
   for (const [key, s] of Object.entries(state.regens)) if (s.running) loadRegen(...key.split(/\/(.*)/s));
+  if (state.driver?.running) loadDriver();
 }, PREPRINT_POLL_MS);
 
 // EventSource reconnects on its own; refetch on reconnect so missed events do not matter.
@@ -776,6 +823,7 @@ es.onopen = () => {
     refreshTopic(ALL_PARTS, true);
   }
   connected = true;
+  loadDriver();
 };
 for (const name of ["topic-changed", "run-started", "run-finished"]) {
   es.addEventListener(name, (e) => {
@@ -785,10 +833,12 @@ for (const name of ["topic-changed", "run-started", "run-finished"]) {
     if (name === "run-finished") toast(d);
   });
 }
+es.addEventListener("driver-changed", () => loadDriver());
 
 try {
   state.topics = await api("/api/topics");
 } catch (e) {
   renderAll(`Could not load topics: ${e.message}`);
 }
+loadDriver();
 await route();
