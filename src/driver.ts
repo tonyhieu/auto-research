@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { makeAnalyst, makeSelector, type Selector } from "./analyst.ts";
+import { dockerUp, enforce, lockExists } from "./guardrails.ts";
 import { type Finding, loadFindings } from "./ledger.ts";
 import {
 	type Action,
@@ -105,8 +106,10 @@ export async function runDriver(opts: DriverOpts): Promise<void> {
 		const findings = loadFindings(topic);
 		const p = readPortfolio(root);
 		const rec = topicRecord(p, topic.slug, topic.title, cfg.area);
-		const { action, rationale: why } = await decide({ findings, rec, cfg, topic });
-		const decision: Decision = { ts: now(), action, rationale: why };
+		const { action: raw, rationale: why } = await decide({ findings, rec, cfg, topic });
+		const g = enforce(raw, rec, cfg, { locked: lockExists(topic), docker: raw.kind === "focus" ? dockerUp() : true });
+		const action = g.action;
+		const decision: Decision = { ts: now(), action, rationale: g.note ? `${why} [${g.note}]` : why };
 		status(action, last);
 		log(`[driver] ${action.kind}: ${why}`);
 
@@ -259,8 +262,17 @@ export async function runPortfolio(opts: PortfolioOpts): Promise<void> {
 			continue;
 		}
 		if (decision.kind === "new-topic") {
+			const since = p.lastNewTopicAt ? Date.now() - Date.parse(p.lastNewTopicAt) : Number.POSITIVE_INFINITY;
+			if (since < cfg.newTopicCooldownHours * 3_600_000) {
+				log(`[director] new-topic on cooldown (${cfg.newTopicCooldownHours}h); idling`);
+				appendDecision(root, { ...entry, outcome: { reason: "cooldown", exitCode: 0 } });
+				last = entry;
+				await sleep(cfg.idleMinutes * 60_000);
+				continue;
+			}
 			const topic = ensureTopic(decision.title, topicsRoot);
 			const code = await startTopicFromBrief(p, topic, decision.brief, decision.area, runner, cfg);
+			p.lastNewTopicAt = new Date().toISOString();
 			writePortfolio(root, p);
 			entry.slug = topic.slug;
 			entry.action = { kind: "breadth", windows: cfg.windows };
@@ -273,10 +285,12 @@ export async function runPortfolio(opts: PortfolioOpts): Promise<void> {
 		// work: delegate the exact action to the per-topic analyst.
 		const rec = p.topics.find((t) => t.slug === decision.slug)!;
 		const topic = ensureTopic(rec.title, topicsRoot);
-		const { action, rationale: why2 } = await decide({ findings: loadFindings(topic), rec, cfg, topic });
+		const { action: raw, rationale: why2 } = await decide({ findings: loadFindings(topic), rec, cfg, topic });
+		const g = enforce(raw, rec, cfg, { locked: lockExists(topic), docker: raw.kind === "focus" ? dockerUp() : true });
+		const action = g.action;
 		entry.slug = topic.slug;
 		entry.action = action;
-		entry.rationale = `${why}; ${why2}`;
+		entry.rationale = `${why}; ${why2}${g.note ? ` [${g.note}]` : ""}`;
 		log(`[analyst] ${action.kind}: ${why2}`);
 		if (action.kind === "retire") {
 			rec.status = "retired";

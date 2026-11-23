@@ -31,6 +31,8 @@ export interface TopicRecord {
 
 export interface Portfolio {
 	topics: TopicRecord[];
+	/** When the driver last started a new topic, to rate-limit new areas. */
+	lastNewTopicAt?: string;
 }
 
 /** The heuristic decider's output; the loop knows the single phase-1 topic, so no topic field yet. */
@@ -76,6 +78,7 @@ export interface DriverConfig {
 	windows: number;
 	maxConsecutiveFocus: number;
 	barrenLimit: number;
+	newTopicCooldownHours: number;
 	idleMinutes: number;
 	/** Test-only: stop the loop after this many cycles. */
 	maxCycles?: number;
@@ -83,7 +86,7 @@ export interface DriverConfig {
 	brief?: string;
 }
 
-export const DEFAULT_CONFIG: DriverConfig = { area: "default", windows: 2, maxConsecutiveFocus: 3, barrenLimit: 2, idleMinutes: 30 };
+export const DEFAULT_CONFIG: DriverConfig = { area: "default", windows: 2, maxConsecutiveFocus: 3, barrenLimit: 2, newTopicCooldownHours: 12, idleMinutes: 30 };
 
 const paths = (root: string) => ({
 	portfolio: join(root, "portfolio.json"),
