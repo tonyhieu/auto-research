@@ -30,7 +30,9 @@ test("validateAction: focus needs a known findingId or a bounded hypothesis", ()
 	assert.equal(validateAction({ action: { kind: "focus", findingId: "f-deadbeef" } }, ctx(findings)).ok, false, "unknown id rejected");
 	assert.equal(validateAction({ action: { kind: "focus" } }, ctx(findings)).ok, false, "needs id or hypothesis");
 	assert.equal(validateAction({ action: { kind: "focus", hypothesis: "x".repeat(1001) } }, ctx(findings)).ok, false, "hypothesis cap");
-	assert.equal((validateAction({ action: { kind: "focus", hypothesis: "test weights" } }, ctx(findings)) as any).action.hypothesis, "test weights");
+	assert.equal(validateAction({ action: { kind: "focus", hypothesis: "test weights" } }, ctx(findings)).ok, false, "too short to be a claim; the CLI would exit 2");
+	const h = "Error-cluster weighting beats class rebalancing on rare-class F1.";
+	assert.equal((validateAction({ action: { kind: "focus", hypothesis: h } }, ctx(findings)) as any).action.hypothesis, h);
 });
 
 test("validateAction: preprint only for a verified+novel finding", () => {
@@ -38,6 +40,8 @@ test("validateAction: preprint only for a verified+novel finding", () => {
 	assert.equal((validateAction({ action: { kind: "preprint", findingId: "f-00000001" } }, ctx(findings)) as any).action.kind, "preprint");
 	assert.equal(validateAction({ action: { kind: "preprint", findingId: "f-00000002" } }, ctx(findings)).ok, false, "known is not novel");
 	assert.equal(validateAction({ action: { kind: "preprint", findingId: "f-missing0" } }, ctx(findings)).ok, false);
+	const rec = { preprinted: ["f-00000001"] } as any;
+	assert.equal(validateAction({ action: { kind: "preprint", findingId: "f-00000001" } }, { ...ctx(findings), rec }).ok, false, "already pre-printed");
 });
 
 test("validateAction: retire needs a reason; idle clamps minutes", () => {

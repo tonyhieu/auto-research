@@ -12,9 +12,8 @@ import { parseReportName } from "./reports.ts";
 import { validateBrief } from "./brief.ts";
 import { ledgerTools } from "./tools.ts";
 import type { Decider } from "./driver.ts";
+import { claimErrors } from "./schema.ts";
 import { REPO_ROOT, type TopicPaths } from "./topic.ts";
-
-const HYPOTHESIS_CAP = 1000;
 
 /** The last brace-balanced JSON object carrying `key`, scanning the reply fences or not. */
 function lastJsonObject(text: string, key: string): Record<string, unknown> | undefined {
@@ -47,7 +46,7 @@ export const parseSelect = (text: string): Record<string, unknown> | undefined =
 
 type Valid = { ok: true; action: Action; rationale: string } | { ok: false; error: string };
 
-export function validateAction(raw: unknown, ctx: { findings: Finding[]; cfg: DriverConfig }): Valid {
+export function validateAction(raw: unknown, ctx: { findings: Finding[]; cfg: DriverConfig; rec?: TopicRecord }): Valid {
 	if (!raw || typeof raw !== "object") return { ok: false, error: "no JSON action object found" };
 	const o = raw as Record<string, unknown>;
 	const a = o.action as Record<string, unknown> | undefined;
@@ -63,7 +62,9 @@ export function validateAction(raw: unknown, ctx: { findings: Finding[]; cfg: Dr
 			const hypothesis = typeof a.hypothesis === "string" ? a.hypothesis.trim() : undefined;
 			if (findingId && !byId.has(findingId)) return { ok: false, error: `focus findingId ${findingId} not in ledger` };
 			if (!findingId && !hypothesis) return { ok: false, error: "focus needs a findingId or a hypothesis" };
-			if (hypothesis && hypothesis.length > HYPOTHESIS_CAP) return { ok: false, error: `hypothesis exceeds ${HYPOTHESIS_CAP} chars` };
+			// The CLI turns a free-text target into a finding claim and exits 2 if it fails the claim schema.
+			const problems = !findingId && hypothesis ? claimErrors(hypothesis) : [];
+			if (problems.length) return { ok: false, error: `hypothesis is not a valid claim: ${problems.join("; ")}` };
 			return { ok: true, action: { kind: "focus", windows, ...(findingId ? { findingId } : { hypothesis }) }, rationale };
 		}
 		case "preprint": {
@@ -71,6 +72,7 @@ export function validateAction(raw: unknown, ctx: { findings: Finding[]; cfg: Dr
 			const f = byId.get(findingId);
 			if (!f) return { ok: false, error: `preprint findingId ${findingId || "(missing)"} not in ledger` };
 			if (!(f.status === "verified" && f.novelty === "novel")) return { ok: false, error: `preprint ${findingId} is not verified+novel` };
+			if (ctx.rec?.preprinted.includes(findingId)) return { ok: false, error: `preprint ${findingId} already written` };
 			return { ok: true, action: { kind: "preprint", findingId }, rationale };
 		}
 		case "retire": {
@@ -89,16 +91,19 @@ export function validateAction(raw: unknown, ctx: { findings: Finding[]; cfg: Dr
 }
 
 // Portfolio-level roaming: pick which topic to advance, or propose a new one.
+/** An existing topic as the selector sees it; area/status drive the roaming guardrails. */
+export type ExistingTopic = { slug: string; title: string; area?: string; status?: TopicRecord["status"]; busy?: boolean };
+
 export interface SelectContext {
 	summary: string;
-	existing: { slug: string; title: string }[];
+	existing: ExistingTopic[];
 	cfg: DriverConfig;
 }
 export type Selector = (ctx: SelectContext) => Promise<{ decision: SelectDecision; rationale: string }>;
 
 type SelectValid = { ok: true; decision: SelectDecision; rationale: string } | { ok: false; error: string };
 
-export function validateSelect(raw: Record<string, unknown> | undefined, ctx: { existing: { slug: string; title: string }[]; cfg: DriverConfig }): SelectValid {
+export function validateSelect(raw: Record<string, unknown> | undefined, ctx: { existing: ExistingTopic[]; cfg: DriverConfig }): SelectValid {
 	if (!raw) return { ok: false, error: "no JSON decision object found" };
 	const d = raw.decision as Record<string, unknown> | undefined;
 	if (!d || typeof d !== "object") return { ok: false, error: "missing decision object" };
@@ -106,12 +111,19 @@ export function validateSelect(raw: Record<string, unknown> | undefined, ctx: { 
 	switch (d.kind) {
 		case "work": {
 			const slug = typeof d.slug === "string" ? d.slug : "";
-			if (!ctx.existing.some((t) => t.slug === slug)) return { ok: false, error: `work slug ${slug || "(missing)"} is not an existing topic` };
+			const t = ctx.existing.find((x) => x.slug === slug);
+			if (!t) return { ok: false, error: `work slug ${slug || "(missing)"} is not an existing topic` };
+			if (t.status === "retired") return { ok: false, error: `topic ${slug} is retired` };
+			if (t.busy) return { ok: false, error: `${slug} is already running in another lane` };
 			return { ok: true, decision: { kind: "work", slug }, rationale };
 		}
 		case "new-topic": {
 			const title = typeof d.title === "string" ? d.title : "";
 			const area = typeof d.area === "string" && d.area.trim() ? d.area.trim() : "default";
+			// Roam to a new area only once every existing topic is exhausted or retired.
+			const active = ctx.existing.filter((x) => x.status === "active");
+			if (active.length && !ctx.existing.some((x) => x.area === area))
+				return { ok: false, error: `new area ${area} while ${active.map((x) => x.slug).join(", ")} are still active; continue them or open a sibling in their area` };
 			const v = validateBrief(title, typeof d.brief === "string" ? d.brief : "", ctx.existing);
 			if (!v.ok) return { ok: false, error: v.error };
 			return { ok: true, decision: { kind: "new-topic", title: title.trim(), area, brief: v.brief }, rationale };
@@ -140,6 +152,8 @@ Decisions (choose exactly one):
 - idle: nothing worth running now; wait.
 - stop: shut the driver down.
 
+Topics marked busy are already being worked on; choose another topic, start a new one, or idle.
+
 Reply with exactly one JSON object and nothing else:
 {"decision": {"kind": "...", ...fields}, "rationale": "one sentence"}`;
 }
@@ -153,8 +167,9 @@ New topics only after the current area is exhausted; at most modest branching. K
 export function makeSelector(models: ModelRuntime, log: (line: string) => void = () => {}): Selector {
 	return async ({ summary, existing, cfg }) => {
 		const cwd = join(REPO_ROOT, "topics");
+		let error = "";
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const prompt = attempt === 0 ? selectPrompt(summary) : `${selectPrompt(summary)}\n\nYour previous reply was not a single valid JSON decision. Reply with exactly one JSON object and nothing else.`;
+			const prompt = attempt === 0 ? selectPrompt(summary) : `${selectPrompt(summary)}\n\nYour previous reply was rejected: ${error}. Reply with exactly one valid JSON object and nothing else.`;
 			let text = "";
 			try {
 				const r = await runAgent({ name: "selector", cwd, systemPrompt: selectSystem(), prompt, builtinTools: ["read", "ls"], tools: [], models, log });
@@ -165,6 +180,7 @@ export function makeSelector(models: ModelRuntime, log: (line: string) => void =
 			}
 			const v = validateSelect(parseSelect(text), { existing, cfg });
 			if (v.ok) return { decision: v.decision, rationale: v.rationale };
+			error = v.error;
 			log(`[selector] invalid decision: ${v.error}`);
 		}
 		return { decision: { kind: "idle", minutes: cfg.idleMinutes, reason: "selector produced no valid decision" }, rationale: "fallback after invalid selector output" };
@@ -200,6 +216,7 @@ Objective: reach findings that are VERIFIED and NOVEL, where the novelty verdict
 Hard constraint: the CPU sandbox has numpy/scipy/sympy/scikit-learn (no torch) and only two datasets, 20 Newsgroups and UCI Covertype. Never propose work that needs other data, GPUs, or real LLMs.
 
 Guardrails: do not grind one claim; after several focus runs with no payoff, switch to breadth or retire. Retire only when the topic has been deepened and nothing worthwhile remains.
+A last run marked "empty" launched no agents (usually the budget was exhausted): it is no evidence about the topic, so never retire because of it.
 
 Actions (choose exactly one):
 - breadth: another exploration window.
@@ -215,7 +232,7 @@ Reply with exactly one JSON object and nothing else:
 function analystPrompt(topic: TopicPaths, rec: TopicRecord, cfg: DriverConfig, findings: Finding[]): string {
 	const report = latestReport(topic);
 	return `Topic "${topic.title}" (area ${rec.area}, status ${rec.status}).
-Runs so far: ${rec.runs}. Consecutive focus runs: ${rec.consecutiveFocus} (cap ${cfg.maxConsecutiveFocus}). Barren runs in a row: ${rec.consecutiveBarrenRuns}.
+Runs so far: ${rec.runs}. Last run: ${rec.lastReason ?? "none"}. Consecutive focus runs: ${rec.consecutiveFocus} (cap ${cfg.maxConsecutiveFocus}). Barren runs in a row: ${rec.consecutiveBarrenRuns}.
 Already deepened: ${rec.deepened.join(", ") || "none"}. Already pre-printed: ${rec.preprinted.join(", ") || "none"}.
 
 Ledger stats:
@@ -232,8 +249,9 @@ export function makeAnalyst(models: ModelRuntime, log: (line: string) => void = 
 	return async ({ findings, rec, cfg, topic }) => {
 		const lt = ledgerTools(topic, "analyst");
 		const base = analystPrompt(topic, rec, cfg, findings);
+		let error = "";
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const prompt = attempt === 0 ? base : `${base}\n\nYour previous reply was not a single valid JSON action. Reply with exactly one JSON object and nothing else.`;
+			const prompt = attempt === 0 ? base : `${base}\n\nYour previous reply was rejected: ${error}. Reply with exactly one valid JSON object and nothing else.`;
 			let text = "";
 			try {
 				const r = await runAgent({ name: "analyst", cwd: topic.dir, systemPrompt: analystSystem(), prompt, builtinTools: ["read", "ls"], tools: [lt.list, lt.get], models, log });
@@ -242,8 +260,9 @@ export function makeAnalyst(models: ModelRuntime, log: (line: string) => void = 
 			} catch (e) {
 				log(`[analyst] error: ${(e as Error).message}`);
 			}
-			const v = validateAction(parseAction(text), { findings, cfg });
+			const v = validateAction(parseAction(text), { findings, cfg, rec });
 			if (v.ok) return { action: v.action, rationale: v.rationale || rec.slug };
+			error = v.error;
 			log(`[analyst] invalid action: ${v.error}`);
 		}
 		return { action: { kind: "idle", minutes: cfg.idleMinutes, reason: "analyst produced no valid action" }, rationale: "fallback after invalid analyst output" };

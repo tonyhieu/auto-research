@@ -183,4 +183,5 @@ a.fid.st-verified::after{color:var(--ok)}a.fid.st-refuted::after{color:var(--bad
 .driver .feed .dec{padding:4px 0;border-top:1px solid var(--line)}
 .driver .feed .dec small{display:block;color:var(--muted)}
 .driver .dot{margin-left:6px}
+.driver .lanes{width:3em;font-size:12px}
 a.paper{color:var(--accent)}

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Autonomous driver: run-forever -t "Topic" [-b brief.md] [-a area]  |  run-forever stop
+# Autonomous driver: run-forever [-p lanes] [-c concurrency]  |  run-forever -t "Topic" [-b brief.md] [-a area]  |  run-forever stop
+# Roam with parallel topics, e.g. `run-forever -p 2 -c 2` (at most four sandbox simulations at once).
 # `stop` asks a running driver to exit gracefully after its current run.
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [ "$1" = "stop" ]; then

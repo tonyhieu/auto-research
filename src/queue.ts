@@ -1,7 +1,7 @@
 // Human brief queue: drop a Markdown brief in briefs/queue/ and the driver starts that topic
 // before consulting the selector. Processed briefs move to queue/done or queue/rejected.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { REPO_ROOT } from "./topic.ts";
 
 export const QUEUE_DIR = join(REPO_ROOT, "briefs", "queue");
@@ -28,9 +28,20 @@ export function nextQueuedBrief(dir: string = QUEUE_DIR): QueuedBrief | undefine
 	return { title, brief, file };
 }
 
+/** Move a brief to queue/active/ so no other lane can take it; returns its new path. */
+export function claimBrief(file: string): string {
+	const dir = join(dirname(file), "active");
+	mkdirSync(dir, { recursive: true });
+	const dest = join(dir, basename(file));
+	renameSync(file, dest);
+	return dest;
+}
+
 /** Move a processed brief out of the queue so the next cycle does not pick it up again. */
 export function archiveBrief(file: string, status: "done" | "rejected", note?: string): void {
-	const dir = join(file, "..", status);
+	// A claimed brief sits in queue/active/; archive it next to it in queue/<status>/.
+	const base = basename(dirname(file)) === "active" ? dirname(dirname(file)) : dirname(file);
+	const dir = join(base, status);
 	mkdirSync(dir, { recursive: true });
 	const dest = join(dir, basename(file));
 	renameSync(file, dest);

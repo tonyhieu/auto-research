@@ -45,6 +45,7 @@ def under(base: Path, path: str) -> bool:
     except ValueError:
         return False
 
+
 def line_count(path: Path) -> int:
     try:
         with path.open() as f:
@@ -144,6 +145,7 @@ class Events:
         if self.portfolio:
             self.portfolio.mkdir(parents=True, exist_ok=True)
             roots.append(self.portfolio)
+
         def watched(_change, p: str) -> bool:
             return classify(self.root, p) is not None or (self.portfolio is not None and under(self.portfolio, p))
 

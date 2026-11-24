@@ -25,6 +25,7 @@ const state = {
   detail: null, // fetched body for `view`
   preprints: {}, // slug -> GET /api/topics/{slug}/preprint; polled while running
   regens: {}, // "slug/report name" -> GET .../reports/{name}/regenerate; polled while running
+  driverLanes: 2, // lanes for the next driver Start
   driver: null, // GET /api/driver: the autonomous driver's status, portfolio, and recent decisions
   open: new Set(), // sidebar <details> keys left open by the user
   seq: 0, // guards against out-of-order detail responses
@@ -709,19 +710,32 @@ function renderDriver() {
   const d = state.driver;
   if (!d) return void ($("driver").innerHTML = "");
   const dot = d.running ? '<span class="dot" title="running"></span>' : "";
-  const btn = d.running ? '<button class="btn2" data-act="driver-stop">Stop</button>' : '<button class="btn2" data-act="driver-start">Start</button>';
+  const btn = d.running
+    ? '<button class="btn2" data-act="driver-stop">Stop</button>'
+    : `<span><input id="driver-lanes" class="lanes" type="number" min="1" max="4" value="${esc(state.driverLanes)}" title="Parallel lanes"> <button class="btn2" data-act="driver-start">Start</button></span>`;
+  const elapsed = (iso) => {
+    const m = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
+    return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`;
+  };
+  const rows = d.running
+    ? [
+        ...(d.lanes || []).map((l) => `<div>L${esc(l.lane)} ${esc(l.label)} &middot; ${elapsed(l.since)}</div>`),
+        ...(d.external || []).map((x) => `<div>ext <code>${esc(x.slug)}</code> &middot; pid ${esc(x.pid)}</div>`),
+      ].join("") || "working"
+    : "idle";
   const feed =
     (d.decisions || [])
       .slice(0, 6)
       .map((x) => {
         const kind = x.select?.kind ?? x.action?.kind ?? "?";
         const slug = x.slug ? ` <code>${esc(x.slug)}</code>` : "";
+        const lane = x.lane != null ? `L${esc(x.lane)} ` : x.reconciled ? "ext " : "";
         const vn = x.outcome && x.outcome.verifiedNovel != null ? ` &middot; vn ${esc(x.outcome.verifiedNovel)}` : "";
         const out = x.outcome ? ` &middot; ${esc(x.outcome.reason)}${vn}` : "";
-        return `<div class="dec"><b>${esc(kind)}</b>${slug}${out}<small>${esc(x.rationale || "")}</small></div>`;
+        return `<div class="dec">${lane}<b>${esc(kind)}</b>${slug}${out}<small>${esc(x.rationale || "")}</small></div>`;
       })
       .join("") || '<div class="none">no decisions yet</div>';
-  $("driver").innerHTML = `<div class="dh"><span>Driver${dot}</span>${btn}</div><div class="dlabel">${d.running ? esc(d.label || "working") : "idle"}</div><div class="feed">${feed}</div>`;
+  $("driver").innerHTML = `<div class="dh"><span>Driver${dot}</span>${btn}</div><div class="dlabel">${rows}</div><div class="feed">${feed}</div>`;
 }
 
 async function loadDriver() {
@@ -734,7 +748,9 @@ async function loadDriver() {
 }
 
 async function startDriver() {
-  const r = await post("/api/driver/start", {});
+  const lanes = Number($("driver-lanes")?.value) || 2;
+  state.driverLanes = Math.min(4, Math.max(1, lanes));
+  const r = await post("/api/driver/start", { lanes: state.driverLanes });
   if (!r.ok) notify("", "error", `Driver not started: ${esc(r.body?.detail ?? `request failed (${r.status})`)}`);
   loadDriver();
 }
@@ -797,6 +813,7 @@ document.addEventListener("change", (e) => {
 // Form fields write through to state; only the live counters and buttons re-render.
 document.addEventListener("input", (e) => {
   const el = e.target;
+  if (el.id === "driver-lanes") return void (state.driverLanes = Number(el.value) || 2);
   if (el.id === "direction") state.direction = el.value;
   else if (el.id === "opt-windows" || el.id === "opt-concurrency") state.opts[el.id.slice(4)] = Number(el.value);
   else if (el.id === "nt-title") state.newTopic.title = el.value;

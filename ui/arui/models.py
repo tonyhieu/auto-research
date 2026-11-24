@@ -115,6 +115,7 @@ class RunEnd(BaseModel):  # state/runs.jsonl
     exitCode: int
     reason: Literal["complete", "signal", "error"]
     findings: int
+    agents: int | None = None  # research/verify agents launched; absent in older events and on signal/error exits
 
 
 RunEvent = Annotated[RunStart | RunEnd, Field(discriminator="event")]

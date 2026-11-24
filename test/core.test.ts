@@ -36,6 +36,26 @@ test("UsageProbe.read does not back off after its last attempt", async () => {
 	assert.deepEqual(sleeps, [5000]);
 });
 
+test("UsageProbe.read falls back to the last reading only while its window is open", async () => {
+	const models = { getAuth: async () => ({ auth: { apiKey: "t" } }) } as unknown as ModelRuntime;
+	const realFetch = globalThis.fetch;
+	const reading = (resetsAt: number) => new Response(JSON.stringify({ five_hour: { utilization: 98, resets_at: new Date(resetsAt).toISOString() } }));
+	try {
+		for (const [resetsAt, expect] of [
+			[Date.now() + 3_600_000, 98], // window still open: the cached reading is still valid
+			[Date.now() - 60_000, undefined], // window already reset: the cached reading belongs to the old window
+		] as const) {
+			const probe = new UsageProbe(models, async () => {});
+			globalThis.fetch = async () => reading(resetsAt);
+			await probe.read(0);
+			globalThis.fetch = async () => new Response("", { status: 429 });
+			assert.equal((await probe.read(0))?.sessionPercent, expect);
+		}
+	} finally {
+		globalThis.fetch = realFetch;
+	}
+});
+
 test("parseUsage falls back to five_hour and rejects empty payloads", () => {
 	assert.equal(parseUsage({ five_hour: { utilization: 7, resets_at: "2026-01-01T00:00:00Z" } })?.sessionPercent, 7);
 	assert.equal(parseUsage({}), undefined);

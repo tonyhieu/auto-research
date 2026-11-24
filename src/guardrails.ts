@@ -1,13 +1,19 @@
 // Hard guardrails applied to the analyst's chosen action before it runs, so autonomy cannot
 // grind one claim, launch a locked topic, or start a focus run with no sandbox.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Action, DriverConfig, TopicRecord } from "./portfolio.ts";
-import type { TopicPaths } from "./topic.ts";
+import { pidAlive, type TopicPaths } from "./topic.ts";
 
-/** A run already holds the topic's lock (another driver, the UI, or a manual run). */
-export const lockExists = (topic: TopicPaths): boolean => existsSync(join(topic.dir, ".lock"));
+/** A live run holds the topic's lock (another driver, the UI, or a manual run); a crashed run's stale lock does not count. */
+export function lockExists(topic: TopicPaths): boolean {
+	try {
+		return pidAlive(Number(readFileSync(join(topic.dir, ".lock"), "utf8")));
+	} catch {
+		return false;
+	}
+}
 
 let dockerChecked = 0;
 let dockerOk = false;
@@ -31,5 +37,8 @@ export function enforce(action: Action, rec: TopicRecord, cfg: DriverConfig, opt
 	if (action.kind === "focus" && rec.consecutiveFocus >= cfg.maxConsecutiveFocus)
 		return { action: { kind: "breadth", windows: action.windows }, note: `focus cap ${cfg.maxConsecutiveFocus} reached; breadth instead` };
 	if (action.kind === "focus" && opts.docker === false) return { action: { kind: "breadth", windows: action.windows }, note: "docker down; breadth instead" };
+	// A run that launched no agents (usually an exhausted budget) is no evidence the topic is finished.
+	if (action.kind === "retire" && rec.lastReason === "empty")
+		return { action: { kind: "idle", minutes: cfg.idleMinutes, reason: "last run was empty; not retiring on it" }, note: "last run empty; retire refused" };
 	return { action };
 }

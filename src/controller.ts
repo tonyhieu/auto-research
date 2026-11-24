@@ -110,7 +110,8 @@ function appendEpoch(t: TopicPaths, e: EpochRecord): void {
 	appendFileSync(epochsFile(t), JSON.stringify(e) + "\n");
 }
 
-export async function runController(o: ControllerOptions): Promise<void> {
+/** `agentsRun` counts research and verify agents launched, so callers can tell a run that did nothing. */
+export async function runController(o: ControllerOptions): Promise<{ agentsRun: number }> {
 	const { topic, models, log, focus } = o;
 	const runAgent = o.run ?? realRunAgent;
 	const sleep = o.sleep ?? realSleep;
@@ -123,7 +124,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 	// Focus mode exists to rerun experiments, so it needs the sandbox.
 	if (sandboxError && focus) {
 		log(`error: focus mode needs python_run, but ${sandboxError}`);
-		return;
+		return { agentsRun: 0 };
 	}
 	if (sandboxError) log(`warning: ${sandboxError}; python_run disabled`);
 	/** A fresh python_run per agent, so each agent gets its own sandbox time budget. */
@@ -410,6 +411,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 
 	/** Window whose summary could not run because the window was exhausted. */
 	let pendingSummary: number | undefined;
+	let agentsRun = 0;
 	// A recorded verdict is in the ledger, so a rerun only drains queued tasks and never re-plans.
 	let phase: Phase = focus && verdictRecorded(topic, focus) ? { kind: "draining", reason: "verdict already recorded" } : PLANNING;
 	if (phase.kind === "draining") log(`focus ${focus!.key}: ${phase.reason}; draining in-scope tasks`);
@@ -487,6 +489,7 @@ export async function runController(o: ControllerOptions): Promise<void> {
 				if (!claimed) break;
 				const isVerify = claimed.type === "verify";
 				const name = `${isVerify ? "ver" : "sub"}-${++subCount}`;
+				agentsRun++;
 				const task = { ...claimed, assignee: name };
 				updateTask(topic.tasks, task);
 				log(`[${name}] claimed ${task.id}: ${task.title}`);
@@ -554,4 +557,5 @@ export async function runController(o: ControllerOptions): Promise<void> {
 		windowStart = lastSummaryAt ?? new Date().toISOString();
 	}
 	log(`run complete: ${budget.describe()}; ${readFindings(topic.ledger).length} findings in ledger`);
+	return { agentsRun };
 }

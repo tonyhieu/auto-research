@@ -51,6 +51,9 @@ test("run events: start and end share a run id; reason comes from the exit code"
 	]);
 	const { ts: _ts, runId: _id, ...first } = ev[0];
 	assert.deepEqual(first, { event: "start", ...start });
+	assert.ok(!("agents" in ev[1]), "no agent count unless the controller returned");
+	recordRunEnd(t, recordRunStart(t, start), 0, 0);
+	assert.equal(lines(t.runs).at(-1).agents, 0);
 });
 
 // No auth in a temp HOME: the run starts, then fails fast in the controller without calling any model.

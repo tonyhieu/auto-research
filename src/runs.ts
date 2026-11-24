@@ -23,8 +23,10 @@ export function recordRunStart(topic: Pick<TopicPaths, "runs">, run: RunStart): 
 }
 
 /** Sync, so it can run in the process exit handler. 0 = complete, 130 = signal, else error. */
-export function recordRunEnd(topic: Pick<TopicPaths, "runs" | "ledger">, runId: string, exitCode: number): void {
+export function recordRunEnd(topic: Pick<TopicPaths, "runs" | "ledger">, runId: string, exitCode: number, agents?: number): void {
 	const reason = exitCode === 0 ? "complete" : exitCode === 130 ? "signal" : "error";
 	const findings = readFindings(topic.ledger).length;
-	appendFileSync(topic.runs, JSON.stringify({ event: "end", runId, ts: new Date().toISOString(), exitCode, reason, findings }) + "\n");
+	// `agents` is known only when the controller returned; signal and error exits omit it.
+	const end = { event: "end", runId, ts: new Date().toISOString(), exitCode, reason, findings, ...(agents === undefined ? {} : { agents }) };
+	appendFileSync(topic.runs, JSON.stringify(end) + "\n");
 }

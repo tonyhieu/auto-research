@@ -71,7 +71,8 @@ def driver_state(portfolio: Path = PORTFOLIO) -> dict:
         "pid": pid if running else None,
         "startedAt": status.get("startedAt"),
         "heartbeatAt": status.get("heartbeatAt"),
-        "label": status.get("label"),
+        "lanes": status.get("lanes") or [],
+        "external": status.get("external") or [],
         "lastDecision": status.get("lastDecision"),
         "topics": port.get("topics", []),
         "decisions": _tail_jsonl(portfolio / "decisions.jsonl", 30),
@@ -178,7 +179,15 @@ class Launcher:
     """Spawns detached bin/research runs. The CLI's topic lock is the real guard; `procs` only covers a child's startup.
     Also spawns bin/preprint, which takes no lock, so `preprints` is its only guard."""
 
-    def __init__(self, root: Path, research: Path = RESEARCH, preprint: Path = PREPRINT, regen: Path = REGEN, run_forever: Path = RUN_FOREVER, portfolio: Path = PORTFOLIO):
+    def __init__(
+        self,
+        root: Path,
+        research: Path = RESEARCH,
+        preprint: Path = PREPRINT,
+        regen: Path = REGEN,
+        run_forever: Path = RUN_FOREVER,
+        portfolio: Path = PORTFOLIO,
+    ):
         self.root, self.research, self.preprint, self.regen = root, research, preprint, regen
         self.run_forever, self.portfolio = run_forever, portfolio
         self.driver: subprocess.Popen | None = None  # last run-forever child this server spawned
@@ -214,12 +223,12 @@ class Launcher:
         """The driver is running (driver.json pid alive) or our child has not exited yet."""
         return driver_state(self.portfolio)["running"] or (self.driver is not None and self.driver.poll() is None)
 
-    def spawn_driver(self) -> tuple[subprocess.Popen, Path]:
-        """Start bin/run-forever in roam mode (call under `mutex`, after `driver_busy`)."""
+    def spawn_driver(self, lanes: int) -> tuple[subprocess.Popen, Path]:
+        """Start bin/run-forever in roam mode with `lanes` parallel runs (call under `mutex`, after `driver_busy`)."""
         ui = self.root / ".ui"
         ui.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S-%f")
-        proc, out = self.popen([str(self.run_forever)], ui / f"driver-{stamp}.out")
+        proc, out = self.popen([str(self.run_forever), "-p", str(lanes)], ui / f"driver-{stamp}.out")
         self.driver = proc
         return proc, out
 

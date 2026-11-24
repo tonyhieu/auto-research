@@ -79,6 +79,7 @@ export class UsageProbe {
 			// No backoff after the last attempt: nothing reads after it.
 			if (attempt < retries) await this.sleep(5000 * 2 ** attempt);
 		}
-		return this.last;
+		// A reading from a window that has since reset would make a fresh window look exhausted.
+		return this.last && this.last.sessionResetsAt.getTime() > Date.now() ? this.last : undefined;
 	}
 }

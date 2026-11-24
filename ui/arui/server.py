@@ -46,6 +46,10 @@ class TopicRequest(Body):
     concurrency: int = Field(3, ge=1)
 
 
+class DriverRequest(Body):
+    lanes: int = Field(2, ge=1, le=4)
+
+
 class RenderRequest(Body):
     md: str = Field(max_length=runs.BRIEF_CAP * 2)
 
@@ -148,7 +152,14 @@ def finding_detail(t: Topic, fid: str) -> dict:
     }
 
 
-def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = runs.PREPRINT, regen: Path = runs.REGEN, run_forever: Path = runs.RUN_FOREVER, portfolio: Path = runs.PORTFOLIO) -> FastAPI:
+def create_app(
+    store: Store,
+    research: Path = runs.RESEARCH,
+    preprint: Path = runs.PREPRINT,
+    regen: Path = runs.REGEN,
+    run_forever: Path = runs.RUN_FOREVER,
+    portfolio: Path = runs.PORTFOLIO,
+) -> FastAPI:
     events = Events(store.root, portfolio)
     launcher = runs.Launcher(store.root, research, preprint, regen, run_forever, portfolio)
 
@@ -307,12 +318,12 @@ def create_app(store: Store, research: Path = runs.RESEARCH, preprint: Path = ru
         return runs.driver_state(launcher.portfolio)
 
     @app.post("/api/driver/start", status_code=202, dependencies=[Depends(local_json)])
-    def driver_start():
+    def driver_start(body: DriverRequest | None = None):
         """Launch the autonomous driver (roam mode); the portfolio STOP flag or this server's stop ends it."""
         with launcher.mutex:
             if launcher.driver_busy():
                 raise HTTPException(409, "the driver is already running")
-            spawned = launcher.spawn_driver()
+            spawned = launcher.spawn_driver((body or DriverRequest()).lanes)
         return {"running": True, "pid": settle_or_500(*spawned)}
 
     @app.post("/api/driver/stop", status_code=202, dependencies=[Depends(local_json)])

@@ -71,12 +71,14 @@ if (!acquireLock(lock)) {
 	process.exit(1);
 }
 let runId: string | undefined;
+/** Agents the controller launched; set only when it returns normally. */
+let agentsRun: number | undefined;
 // Sync only: the exit handler cannot await, and sandbox kill timers die with the process.
 process.on("exit", (code) => {
 	killAllSandboxes();
 	// Before the lock goes, so readers see the end event once unlocked; a failed write still frees the lock.
 	try {
-		if (runId) recordRunEnd(topic, runId, code);
+		if (runId) recordRunEnd(topic, runId, code, agentsRun);
 	} finally {
 		if (existsSync(lock)) unlinkSync(lock);
 	}
@@ -110,4 +112,4 @@ const stale = resetStaleClaims(topic.tasks);
 if (stale) log(`re-opened ${stale} task(s) left claimed by a previous run`);
 
 const models = await ModelRuntime.create();
-await runController({ topic, models, usage: new UsageProbe(models), windows, concurrency, log, focus });
+({ agentsRun } = await runController({ topic, models, usage: new UsageProbe(models), windows, concurrency, log, focus }));

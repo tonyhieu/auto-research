@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { enforce } from "../src/guardrails.ts";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { enforce, lockExists } from "../src/guardrails.ts";
+import { ensureTopic } from "../src/topic.ts";
 import { DEFAULT_CONFIG, type TopicRecord } from "../src/portfolio.ts";
 
 const rec = (over: Partial<TopicRecord> = {}): TopicRecord => ({
@@ -40,4 +44,20 @@ test("enforce: within limits the action passes through unchanged", () => {
 	const g = enforce(a, rec({ deepened: ["f-00000001"] }), DEFAULT_CONFIG, { locked: false, docker: true });
 	assert.equal(g.action, a);
 	assert.equal(g.note, undefined);
+});
+
+test("lockExists: a live pid counts; a crashed run's stale lock does not", () => {
+	const topic = ensureTopic("Lock Demo", mkdtempSync(join(tmpdir(), "ar-topics-")));
+	assert.equal(lockExists(topic), false);
+	writeFileSync(join(topic.dir, ".lock"), String(process.pid));
+	assert.equal(lockExists(topic), true);
+	writeFileSync(join(topic.dir, ".lock"), "99999999");
+	assert.equal(lockExists(topic), false);
+});
+
+test("enforce: no retiring right after an empty run; it says nothing about the topic", () => {
+	const g = enforce({ kind: "retire", reason: "last window ran nothing" }, rec({ lastReason: "empty" }), DEFAULT_CONFIG);
+	assert.equal(g.action.kind, "idle");
+	assert.match(g.note ?? "", /empty/);
+	assert.equal(enforce({ kind: "retire", reason: "done" }, rec({ lastReason: "complete" }), DEFAULT_CONFIG).action.kind, "retire");
 });

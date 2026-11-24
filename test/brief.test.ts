@@ -42,6 +42,16 @@ test("validateSelect: work must name an existing slug; new-topic must pass the b
 	assert.ok(nt.ok && (nt.decision as Extract<SelectDecision, { kind: "new-topic" }>).brief.includes("Covertype"));
 });
 
+test("validateSelect: no work on a retired topic; a new area only once no topic is active", () => {
+	const slug = "diversity-weighted-synthetic-data";
+	const mk = (status: "active" | "exhausted" | "retired") => [{ ...existing[0], area: "synthetic", status }];
+	assert.equal(validateSelect({ decision: { kind: "work", slug } }, { existing: mk("retired"), cfg: DEFAULT_CONFIG }).ok, false);
+	const nt = (area: string) => ({ decision: { kind: "new-topic", title: "Error-cluster weighting", area, brief: body } });
+	assert.equal(validateSelect(nt("weighting"), { existing: mk("active"), cfg: DEFAULT_CONFIG }).ok, false, "new area while active");
+	assert.equal(validateSelect(nt("synthetic"), { existing: mk("active"), cfg: DEFAULT_CONFIG }).ok, true, "sibling in the same area");
+	assert.equal(validateSelect(nt("weighting"), { existing: mk("exhausted"), cfg: DEFAULT_CONFIG }).ok, true, "roam once exhausted");
+});
+
 test("runPortfolio: a new-topic seeds a brief and runs breadth, then work retires, then stop", async () => {
 	const root = mkdtempSync(join(tmpdir(), "ar-portfolio-"));
 	const topicsRoot = mkdtempSync(join(tmpdir(), "ar-topics-"));
